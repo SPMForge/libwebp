@@ -1,11 +1,13 @@
 *.l[ao]
 *.[ao]
 *.pc
+*.py[cod]
 .DS_Store
 .deps
 .idea
 .libs
 .vscode
+__pycache__/
 /aclocal.m4
 /ar-lib
 /autom4te.cache
