@@ -34,7 +34,9 @@ The build matrix covers mergeable slices for:
 - Upstream source of truth: `https://github.com/webmproject/libwebp`
 - Automatic publishing: the `release-latest-stable` workflow checks upstream
   stable tags (`vX.Y.Z`) on a schedule and only publishes when a newer stable
-  tag exists.
+  tag exists. If the package tag already exists but the GitHub Release is
+  incomplete, the workflow repairs the missing release assets instead of
+  silently skipping the version.
 - Manual backfill: the `backfill-release` workflow publishes a specific stable
   upstream tag without requiring the repository to catch up through every
   historical version.
@@ -92,7 +94,8 @@ The repository ships two release helpers:
 - [`scripts/spm_release.py`](scripts/spm_release.py): selects stable upstream
   tags, renders `Package.swift`, computes checksums, prints the Apple build
   matrix, builds mergeable XCFrameworks, validates mergeable metadata, and runs
-  a local macOS consumer smoke test for Debug and Release.
+  local macOS consumer smoke tests for both the direct XCFramework path and a
+  real SwiftPM binary-target integration in Debug and Release.
 - [`scripts/build_apple_xcframeworks.sh`](scripts/build_apple_xcframeworks.sh):
   thin wrapper around the Python release tool for local use and CI.
 
@@ -113,6 +116,8 @@ Build prerequisites:
 - `cmake`
 - `xcrun vtool`
 - Swift toolchain with `swift package compute-checksum`
+- Requested Apple platform destinations must be available in Xcode; the build
+  now fails fast instead of silently emitting a mislabeled fallback slice.
 
 ## Repository Notes
 
@@ -122,5 +127,6 @@ Build prerequisites:
 - `watchOS` mergeable slices are published for `arm64` and `arm64_32`; `armv7k`
   is intentionally excluded because the current Apple linker does not support
   mergeable output for that architecture.
-- If a release job fails after pushing a tag but before uploading all assets, rerun
-  the manual backfill workflow for the same tag to repair the GitHub Release.
+- If a release job fails after pushing a tag but before uploading all assets,
+  rerun the manual backfill workflow for the same tag. The workflow now repairs
+  the existing GitHub Release instead of rejecting the already-published tag.

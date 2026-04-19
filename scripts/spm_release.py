@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import plistlib
 import re
 import shutil
@@ -23,6 +24,7 @@ if sys.version_info < (3, 10):
 
 STABLE_TAG_PATTERN = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 CHECKSUM_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+RELEASE_METADATA_ASSETS: tuple[str, ...] = ("checksums.json",)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -51,11 +53,19 @@ class ReleaseArtifact:
 
 
 @dataclasses.dataclass(frozen=True)
+class ReleasePublicationPlan:
+    mode: str
+    required_assets: tuple[str, ...]
+    missing_assets: tuple[str, ...]
+
+
+@dataclasses.dataclass(frozen=True)
 class PlatformGroup:
     name: str
     identifier: str
     supported_platform: str
     sdk: str
+    cmake_system_name: str | None
     deployment_setting: str
     minimum_version: str
     architectures: tuple[str, ...]
@@ -89,6 +99,7 @@ class PlatformGroup:
             "supported_platform": self.supported_platform,
             "supported_platform_variant": self.supported_platform_variant,
             "sdk": self.sdk,
+            "cmake_system_name": self.cmake_system_name,
             "deployment_setting": self.deployment_setting,
             "minimum_version": self.minimum_version,
             "architectures": list(self.architectures),
@@ -120,8 +131,8 @@ ARTIFACT_DEFINITIONS: tuple[ArtifactDefinition, ...] = (
         consumer_dependencies=("WebP",),
         consumer_source=textwrap.dedent(
             """\
-            #include "decode.h"
-            #include "encode.h"
+            #include "webp/decode.h"
+            #include "webp/encode.h"
 
             int main(void) {
               return (WebPGetDecoderVersion() > 0 && WebPGetEncoderVersion() > 0) ? 0 : 1;
@@ -140,7 +151,7 @@ ARTIFACT_DEFINITIONS: tuple[ArtifactDefinition, ...] = (
         consumer_dependencies=("WebPDecoder",),
         consumer_source=textwrap.dedent(
             """\
-            #include "decode.h"
+            #include "webp/decode.h"
 
             int main(void) {
               return WebPGetDecoderVersion() > 0 ? 0 : 1;
@@ -162,7 +173,7 @@ ARTIFACT_DEFINITIONS: tuple[ArtifactDefinition, ...] = (
         consumer_source=textwrap.dedent(
             """\
             #include <stdint.h>
-            #include "demux.h"
+            #include "webp/demux.h"
 
             int main(void) {
               const WebPDemuxer* demux = NULL;
@@ -183,7 +194,7 @@ ARTIFACT_DEFINITIONS: tuple[ArtifactDefinition, ...] = (
         consumer_dependencies=("WebPMux", "WebP"),
         consumer_source=textwrap.dedent(
             """\
-            #include "mux.h"
+            #include "webp/mux.h"
 
             int main(void) {
               WebPMux* mux = WebPMuxNew();
@@ -205,8 +216,8 @@ ARTIFACT_DEFINITIONS: tuple[ArtifactDefinition, ...] = (
         consumer_dependencies=("SharpYuv",),
         consumer_source=textwrap.dedent(
             """\
-            #include "sharpyuv.h"
-            #include "sharpyuv_csp.h"
+            #include "sharpyuv/sharpyuv.h"
+            #include "sharpyuv/sharpyuv_csp.h"
 
             int main(void) {
               return SharpYuvGetVersion() > 0 ? 0 : 1;
@@ -223,10 +234,12 @@ PLATFORM_GROUPS: tuple[PlatformGroup, ...] = (
         identifier="ios",
         supported_platform="ios",
         sdk="iphoneos",
+        cmake_system_name="iOS",
         deployment_setting="IPHONEOS_DEPLOYMENT_TARGET",
         minimum_version="13.0",
         architectures=("arm64",),
         expected_vtool_platform="IOS",
+        destination="generic/platform=iOS",
     ),
     PlatformGroup(
         name="iOS Simulator",
@@ -234,21 +247,25 @@ PLATFORM_GROUPS: tuple[PlatformGroup, ...] = (
         supported_platform="ios",
         supported_platform_variant="simulator",
         sdk="iphonesimulator",
+        cmake_system_name="iOS",
         deployment_setting="IPHONEOS_DEPLOYMENT_TARGET",
         minimum_version="13.0",
         architectures=("arm64", "x86_64"),
         expected_vtool_platform="IOSSIMULATOR",
         simulator=True,
+        destination="generic/platform=iOS Simulator",
     ),
     PlatformGroup(
         name="macOS",
         identifier="macos",
         supported_platform="macos",
         sdk="macosx",
+        cmake_system_name=None,
         deployment_setting="MACOSX_DEPLOYMENT_TARGET",
         minimum_version="10.15",
         architectures=("arm64", "x86_64"),
         expected_vtool_platform="MACOS",
+        destination="generic/platform=macOS",
     ),
     PlatformGroup(
         name="Mac Catalyst",
@@ -256,6 +273,7 @@ PLATFORM_GROUPS: tuple[PlatformGroup, ...] = (
         supported_platform="ios",
         supported_platform_variant="maccatalyst",
         sdk="macosx",
+        cmake_system_name=None,
         deployment_setting="IPHONEOS_DEPLOYMENT_TARGET",
         minimum_version="14.0",
         architectures=("arm64", "x86_64"),
@@ -268,10 +286,12 @@ PLATFORM_GROUPS: tuple[PlatformGroup, ...] = (
         identifier="tvos",
         supported_platform="tvos",
         sdk="appletvos",
+        cmake_system_name="tvOS",
         deployment_setting="TVOS_DEPLOYMENT_TARGET",
         minimum_version="13.0",
         architectures=("arm64",),
         expected_vtool_platform="TVOS",
+        destination="generic/platform=tvOS",
     ),
     PlatformGroup(
         name="tvOS Simulator",
@@ -279,21 +299,25 @@ PLATFORM_GROUPS: tuple[PlatformGroup, ...] = (
         supported_platform="tvos",
         supported_platform_variant="simulator",
         sdk="appletvsimulator",
+        cmake_system_name="tvOS",
         deployment_setting="TVOS_DEPLOYMENT_TARGET",
         minimum_version="13.0",
         architectures=("arm64", "x86_64"),
         expected_vtool_platform="TVOSSIMULATOR",
         simulator=True,
+        destination="generic/platform=tvOS Simulator",
     ),
     PlatformGroup(
         name="watchOS",
         identifier="watchos",
         supported_platform="watchos",
         sdk="watchos",
+        cmake_system_name="watchOS",
         deployment_setting="WATCHOS_DEPLOYMENT_TARGET",
         minimum_version="8.0",
         architectures=("arm64", "arm64_32"),
         expected_vtool_platform="WATCHOS",
+        destination="generic/platform=watchOS",
     ),
     PlatformGroup(
         name="watchOS Simulator",
@@ -301,21 +325,25 @@ PLATFORM_GROUPS: tuple[PlatformGroup, ...] = (
         supported_platform="watchos",
         supported_platform_variant="simulator",
         sdk="watchsimulator",
+        cmake_system_name="watchOS",
         deployment_setting="WATCHOS_DEPLOYMENT_TARGET",
         minimum_version="8.0",
         architectures=("arm64", "x86_64"),
         expected_vtool_platform="WATCHOSSIMULATOR",
         simulator=True,
+        destination="generic/platform=watchOS Simulator",
     ),
     PlatformGroup(
         name="visionOS",
         identifier="visionos",
         supported_platform="xros",
         sdk="xros",
+        cmake_system_name="visionOS",
         deployment_setting="XROS_DEPLOYMENT_TARGET",
         minimum_version="1.0",
         architectures=("arm64",),
         expected_vtool_platform="VISIONOS",
+        destination="generic/platform=visionOS",
     ),
     PlatformGroup(
         name="visionOS Simulator",
@@ -323,11 +351,13 @@ PLATFORM_GROUPS: tuple[PlatformGroup, ...] = (
         supported_platform="xros",
         supported_platform_variant="simulator",
         sdk="xrsimulator",
+        cmake_system_name="visionOS",
         deployment_setting="XROS_DEPLOYMENT_TARGET",
         minimum_version="1.0",
         architectures=("arm64", "x86_64"),
         expected_vtool_platform="VISIONOSSIMULATOR",
         simulator=True,
+        destination="generic/platform=visionOS Simulator",
     ),
 )
 
@@ -348,7 +378,6 @@ CMAKE_CONFIGURATION_ARGS: tuple[str, ...] = (
     "-DWEBP_BUILD_WEBP_JS=OFF",
     "-DWEBP_BUILD_FUZZTEST=OFF",
     "-DCMAKE_XCODE_GENERATE_SCHEME=YES",
-    "-DCMAKE_XCODE_ATTRIBUTE_SUPPORTS_MACCATALYST=YES",
 )
 
 
@@ -390,6 +419,41 @@ def release_artifacts_for_tag(tag: str) -> list[ReleaseArtifact]:
     ]
 
 
+def required_release_asset_names(tag: str) -> tuple[str, ...]:
+    artifacts = release_artifacts_for_tag(tag)
+    return tuple(
+        [*(artifact.archive_name for artifact in artifacts), *RELEASE_METADATA_ASSETS]
+    )
+
+
+def plan_release_publication(
+    *,
+    tag: str,
+    remote_tag_exists: bool,
+    release_asset_names: Iterable[str],
+) -> ReleasePublicationPlan:
+    required_assets = required_release_asset_names(tag)
+    published_assets = {asset_name for asset_name in release_asset_names if asset_name}
+    missing_assets = tuple(asset_name for asset_name in required_assets if asset_name not in published_assets)
+    if not remote_tag_exists:
+        return ReleasePublicationPlan(
+            mode="fresh",
+            required_assets=required_assets,
+            missing_assets=required_assets,
+        )
+    if missing_assets:
+        return ReleasePublicationPlan(
+            mode="repair",
+            required_assets=required_assets,
+            missing_assets=missing_assets,
+        )
+    return ReleasePublicationPlan(
+        mode="skip",
+        required_assets=required_assets,
+        missing_assets=(),
+    )
+
+
 def render_package_swift(
     *,
     owner: str,
@@ -423,8 +487,13 @@ def render_package_swift(
         )
 
     product_lines = [
-        f'        .library(name: "{artifact.target_name}", targets: ["{artifact.target_name}"])'
-        for artifact in artifact_map.values()
+        "        .library("
+        + f'name: "{definition.target_name}", '
+        + "targets: ["
+        + ", ".join(f'"{dependency_name}"' for dependency_name in definition.consumer_dependencies)
+        + "]"
+        + ")"
+        for definition in ARTIFACT_DEFINITIONS
     ]
     target_lines = [
         "\n".join(
@@ -465,6 +534,196 @@ def render_package_swift(
             "",
         ]
     )
+
+
+def swift_string_literal(value: str) -> str:
+    return json.dumps(value)
+
+
+def render_local_binary_package_swift(
+    *,
+    package_name: str,
+    xcframework_paths: dict[str, Path],
+) -> str:
+    if not package_name:
+        raise ValueError("Package name must not be empty.")
+
+    missing_targets = sorted(
+        definition.target_name
+        for definition in ARTIFACT_DEFINITIONS
+        if definition.target_name not in xcframework_paths
+    )
+    if missing_targets:
+        raise ValueError(
+            "Missing XCFramework paths for binary targets: " + ", ".join(missing_targets)
+        )
+
+    product_lines = [
+        "        .library("
+        + f'name: "{definition.target_name}", '
+        + "targets: ["
+        + ", ".join(f'"{dependency_name}"' for dependency_name in definition.consumer_dependencies)
+        + "]"
+        + ")"
+        for definition in ARTIFACT_DEFINITIONS
+    ]
+    target_lines = [
+        "\n".join(
+            [
+                "        .binaryTarget(",
+                f'            name: "{definition.target_name}",',
+                "            path: "
+                + swift_string_literal(str(xcframework_paths[definition.target_name]))
+                ,
+                "        )",
+            ]
+        )
+        for definition in ARTIFACT_DEFINITIONS
+    ]
+
+    return "\n".join(
+        [
+            "// swift-tools-version: 5.9",
+            "import PackageDescription",
+            "",
+            "let package = Package(",
+            f"    name: {swift_string_literal(package_name)},",
+            "    platforms: [",
+            "        .iOS(.v13),",
+            "        .macOS(.v10_15),",
+            "        .tvOS(.v13),",
+            "        .watchOS(.v8),",
+            "        .visionOS(.v1)",
+            "    ],",
+            "    products: [",
+            ",\n".join(product_lines),
+            "    ],",
+            "    targets: [",
+            ",\n".join(target_lines),
+            "    ]",
+            ")",
+            "",
+        ]
+    )
+
+
+def render_spm_consumer_package_swift(
+    *,
+    binary_package_name: str,
+    binary_package_path: str,
+) -> str:
+    if not binary_package_name:
+        raise ValueError("Binary package name must not be empty.")
+    if not binary_package_path:
+        raise ValueError("Binary package path must not be empty.")
+
+    dependency_lines = [
+        f'                .product(name: "{definition.target_name}", package: "{binary_package_name}")'
+        for definition in ARTIFACT_DEFINITIONS
+    ]
+
+    return "\n".join(
+        [
+            "// swift-tools-version: 5.9",
+            "import PackageDescription",
+            "",
+            "let package = Package(",
+            '    name: "spm-libwebp-consumer",',
+            "    platforms: [",
+            "        .macOS(.v10_15)",
+            "    ],",
+            "    dependencies: [",
+            "        .package("
+            + f"name: {swift_string_literal(binary_package_name)}, "
+            + f"path: {swift_string_literal(binary_package_path)}"
+            + ")",
+            "    ],",
+            "    targets: [",
+            "        .executableTarget(",
+            '            name: "SpmSmokeConsumer",',
+            "            dependencies: [",
+            ",\n".join(dependency_lines),
+            "            ]",
+            "        )",
+            "    ]",
+            ")",
+            "",
+        ]
+    )
+
+
+def render_spm_consumer_sources() -> dict[str, str]:
+    return {
+        "App.swift": "\n".join(
+            [
+                "@main",
+                "struct SpmSmokeConsumer {",
+                "    static func main() {",
+                "        runWebPProbe()",
+                "        runWebPDecoderProbe()",
+                "        runWebPDemuxProbe()",
+                "        runWebPMuxProbe()",
+                "        runSharpYuvProbe()",
+                "    }",
+                "}",
+                "",
+            ]
+        ),
+        "WebPProbe.swift": "\n".join(
+            [
+                "import WebP",
+                "",
+                "func runWebPProbe() {",
+                "    precondition(WebPGetDecoderVersion() > 0)",
+                "    precondition(WebPGetEncoderVersion() > 0)",
+                "}",
+                "",
+            ]
+        ),
+        "WebPDecoderProbe.swift": "\n".join(
+            [
+                "import WebPDecoder",
+                "",
+                "func runWebPDecoderProbe() {",
+                "    precondition(WebPGetDecoderVersion() > 0)",
+                "}",
+                "",
+            ]
+        ),
+        "WebPDemuxProbe.swift": "\n".join(
+            [
+                "import WebPDemux",
+                "",
+                "func runWebPDemuxProbe() {",
+                "    precondition(WebPDemuxGetI(nil, WEBP_FF_CANVAS_WIDTH) == 0)",
+                "}",
+                "",
+            ]
+        ),
+        "WebPMuxProbe.swift": "\n".join(
+            [
+                "import WebPMux",
+                "",
+                "func runWebPMuxProbe() {",
+                "    guard let mux = WebPMuxNew() else {",
+                '        fatalError("Expected WebPMuxNew to return a mux instance")',
+                "    }",
+                "    WebPMuxDelete(mux)",
+                "}",
+                "",
+            ]
+        ),
+        "SharpYuvProbe.swift": "\n".join(
+            [
+                "import SharpYuv",
+                "",
+                "func runSharpYuvProbe() {",
+                "    precondition(SharpYuvGetVersion() > 0)",
+                "}",
+                "",
+            ]
+        ),
+    }
 
 
 def validate_checksums_payload(raw_checksums: object) -> dict[str, str]:
@@ -548,7 +807,7 @@ def command_output(args: list[str], *, cwd: Path | None = None) -> str:
 
 
 def ensure_build_prerequisites() -> None:
-    for command in ("cmake", "xcodebuild", "xcrun", "swift", "plutil", "otool"):
+    for command in ("cmake", "xcodebuild", "xcrun", "swift", "plutil", "otool", "install_name_tool"):
         ensure_command_exists(command)
     for group in PLATFORM_GROUPS:
         command_output(["xcrun", "--sdk", group.sdk, "--show-sdk-path"])
@@ -581,12 +840,17 @@ def cmake_configuration_args_for_platform_group(platform_group: PlatformGroup) -
     # The Xcode generator needs the target architectures at configure time.
     # Passing only ARCHS during archive can produce object library references
     # that point at the wrong architecture directory in universal builds.
-    return (
+    arguments = [
         *CMAKE_CONFIGURATION_ARGS,
         f"-DCMAKE_OSX_ARCHITECTURES={platform_group.cmake_architectures}",
         f"-DCMAKE_OSX_SYSROOT={platform_group.sdk}",
         f"-DCMAKE_OSX_DEPLOYMENT_TARGET={platform_group.minimum_version}",
-    )
+        "-DCMAKE_XCODE_ATTRIBUTE_SUPPORTS_MACCATALYST="
+        + ("YES" if platform_group.catalyst else "NO"),
+    ]
+    if platform_group.cmake_system_name is not None:
+        arguments.append(f"-DCMAKE_SYSTEM_NAME={platform_group.cmake_system_name}")
+    return tuple(arguments)
 
 
 def configure_cmake_project(
@@ -617,35 +881,41 @@ def configure_cmake_project(
     return project_paths[0]
 
 
+def header_include_path(target_name: str, relative_path: str) -> Path:
+    source_path = Path(relative_path)
+    if source_path.parts and source_path.parts[0] == "src":
+        source_path = Path(*source_path.parts[1:])
+    return source_path
+
+
+def rewrite_public_header_text(target_name: str, relative_path: str, contents: str) -> str:
+    if target_name == "SharpYuv" and relative_path == "sharpyuv/sharpyuv_csp.h":
+        return contents.replace('#include "sharpyuv/sharpyuv.h"', '#include "./sharpyuv.h"')
+    return contents
+
+
 def prepare_header_directories(source_dir: Path, output_root: Path) -> dict[str, Path]:
     header_paths: dict[str, Path] = {}
     for definition in ARTIFACT_DEFINITIONS:
         header_dir = output_root / definition.target_name
         header_dir.mkdir(parents=True, exist_ok=True)
-        copied_headers: list[str] = []
         for relative_path in definition.public_headers:
             source_header = source_dir / relative_path
             if not source_header.exists():
                 raise RuntimeError(
                     f"Missing public header for {definition.target_name}: {source_header}"
                 )
-            destination = header_dir / source_header.name
-            shutil.copy2(source_header, destination)
-            copied_headers.append(source_header.name)
-
-        module_map_path = header_dir / "module.modulemap"
-        module_map_path.write_text(
-            "\n".join(
-                [
-                    f"module {definition.target_name} {{",
-                    *[f'  header "{header_name}"' for header_name in copied_headers],
-                    "  export *",
-                    "}",
-                    "",
-                ]
-            ),
-            encoding="utf-8",
-        )
+            include_path = header_include_path(definition.target_name, relative_path)
+            destination = header_dir / include_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(
+                rewrite_public_header_text(
+                    definition.target_name,
+                    relative_path,
+                    source_header.read_text(encoding="utf-8"),
+                ),
+                encoding="utf-8",
+            )
         header_paths[definition.target_name] = header_dir
     return header_paths
 
@@ -669,6 +939,67 @@ def find_built_dynamic_library(root: Path, library_name: str) -> Path:
     candidates = concrete_files or matches
     candidates.sort(key=lambda path: (len(path.name), path.name), reverse=True)
     return candidates[0]
+
+
+def destination_probe_tokens(platform_group: PlatformGroup) -> tuple[str, ...]:
+    if platform_group.catalyst:
+        return ("platform:macOS", "variant:Mac Catalyst")
+    return (f"platform:{platform_group.name}",)
+
+
+def xcode_download_platform_name(platform_group: PlatformGroup) -> str | None:
+    if platform_group.catalyst or platform_group.identifier == "macos":
+        return None
+    if platform_group.identifier.startswith("visionos"):
+        return "visionOS"
+    return platform_group.name.removesuffix(" Simulator")
+
+
+def assert_destination_available(
+    *,
+    project_path: Path,
+    scheme: str,
+    platform_group: PlatformGroup,
+) -> None:
+    if platform_group.destination is None:
+        return
+
+    output = command_output(
+        [
+            "xcodebuild",
+            "-project",
+            str(project_path),
+            "-scheme",
+            scheme,
+            "-showdestinations",
+        ]
+    )
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("{"):
+            continue
+        if not all(token in line for token in destination_probe_tokens(platform_group)):
+            continue
+        if "error:" in line:
+            download_platform = xcode_download_platform_name(platform_group)
+            guidance = ""
+            if download_platform is not None:
+                guidance = (
+                    " Install the missing platform with "
+                    + f"`xcodebuild -downloadPlatform {download_platform}`"
+                    + " or from Xcode > Settings > Components."
+                )
+            raise RuntimeError(
+                "Requested destination "
+                + f"{platform_group.destination} is unavailable for scheme {scheme}: {line}"
+                + guidance
+            )
+        return
+
+    raise RuntimeError(
+        "Requested destination "
+        + f"{platform_group.destination} was not reported by xcodebuild -showdestinations for scheme {scheme}"
+    )
 
 
 def build_archive_for_slice(
@@ -702,9 +1033,15 @@ def build_archive_for_slice(
     if platform_group.destination is not None:
         arguments.extend(["-destination", platform_group.destination])
     arguments.extend(platform_group.build_settings())
+    assert_destination_available(
+        project_path=project_path,
+        scheme=artifact_definition.cmake_target,
+        platform_group=platform_group,
+    )
     run_command(arguments)
 
     binary_path = find_built_dynamic_library(derived_data_path, artifact_definition.library_name)
+    validate_binary_platform(binary_path, platform_group.expected_vtool_platform)
     return BuiltSlice(
         platform_group=platform_group,
         archive_path=archive_path,
@@ -739,6 +1076,102 @@ def build_archived_libraries(
     return build_output
 
 
+def framework_binary_name(target_name: str) -> str:
+    return target_name
+
+
+def framework_install_name(target_name: str) -> str:
+    return f"@rpath/{target_name}.framework/{framework_binary_name(target_name)}"
+
+
+def render_framework_module_map(definition: ArtifactDefinition) -> str:
+    header_lines = [
+        f'  header "{header_include_path(definition.target_name, relative_path).as_posix()}"'
+        for relative_path in definition.public_headers
+    ]
+    return "\n".join(
+        [
+            f"framework module {definition.target_name} {{",
+            *header_lines,
+            "  export *",
+            "}",
+            "",
+        ]
+    )
+
+
+def framework_info_plist_bytes(target_name: str) -> bytes:
+    payload = {
+        "CFBundleExecutable": framework_binary_name(target_name),
+        "CFBundleIdentifier": f"dev.spmforge.libwebp.{target_name}",
+        "CFBundleName": target_name,
+        "CFBundlePackageType": "FMWK",
+        "CFBundleShortVersionString": "1.0",
+        "CFBundleVersion": "1",
+    }
+    return plistlib.dumps(payload, fmt=plistlib.FMT_XML)
+
+
+def linked_install_name(binary_path: Path, library_name: str) -> str:
+    output = command_output(["otool", "-L", str(binary_path)])
+    library_stem = library_name.removesuffix(".dylib")
+    for raw_line in output.splitlines()[1:]:
+        line = raw_line.strip()
+        if not line:
+            continue
+        install_name = line.split(" ", 1)[0]
+        if library_stem in install_name:
+            return install_name
+    raise RuntimeError(f"Unable to locate linked install name for {library_name} in {binary_path}")
+
+
+def assemble_framework_bundle(
+    frameworks_root: Path,
+    *,
+    definition: ArtifactDefinition,
+    built_slice: BuiltSlice,
+    headers_root: Path,
+) -> Path:
+    framework_dir = (
+        frameworks_root
+        / definition.target_name
+        / built_slice.platform_group.identifier
+        / f"{definition.target_name}.framework"
+    )
+    if framework_dir.exists():
+        shutil.rmtree(framework_dir)
+
+    headers_dir = framework_dir / "Headers"
+    modules_dir = framework_dir / "Modules"
+    headers_dir.mkdir(parents=True, exist_ok=True)
+    modules_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(headers_root, headers_dir, dirs_exist_ok=True)
+
+    binary_path = framework_dir / framework_binary_name(definition.target_name)
+    shutil.copy2(built_slice.binary_path, binary_path)
+    run_command(["install_name_tool", "-id", framework_install_name(definition.target_name), str(binary_path)])
+
+    for dependency_name in definition.consumer_dependencies[1:]:
+        dependency = artifact_definition_by_name(dependency_name)
+        current_install_name = linked_install_name(binary_path, dependency.library_name)
+        run_command(
+            [
+                "install_name_tool",
+                "-change",
+                current_install_name,
+                framework_install_name(dependency.target_name),
+                str(binary_path),
+            ]
+        )
+
+    (modules_dir / "module.modulemap").write_text(
+        render_framework_module_map(definition),
+        encoding="utf-8",
+    )
+    (framework_dir / "Info.plist").write_bytes(framework_info_plist_bytes(definition.target_name))
+    return framework_dir
+
+
 def create_xcframeworks(
     artifacts_dir: Path,
     build_output: dict[str, list[BuiltSlice]],
@@ -746,17 +1179,22 @@ def create_xcframeworks(
 ) -> dict[str, Path]:
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     created_xcframeworks: dict[str, Path] = {}
+    frameworks_root = artifacts_dir / "_frameworks"
 
     for definition in ARTIFACT_DEFINITIONS:
         xcframework_dir = artifacts_dir / definition.xcframework_name
         arguments = ["xcodebuild", "-create-xcframework"]
         for built_slice in build_output[definition.target_name]:
+            framework_dir = assemble_framework_bundle(
+                frameworks_root,
+                definition=definition,
+                built_slice=built_slice,
+                headers_root=header_paths[definition.target_name],
+            )
             arguments.extend(
                 [
-                    "-library",
-                    str(built_slice.binary_path),
-                    "-headers",
-                    str(header_paths[definition.target_name]),
+                    "-framework",
+                    str(framework_dir),
                 ]
             )
         arguments.extend(["-output", str(xcframework_dir)])
@@ -841,7 +1279,7 @@ def cmake_quote(value: str) -> str:
     return value.replace("\\", "/").replace('"', '\\"')
 
 
-def write_consumer_fixture(consumer_root: Path, xcframeworks: dict[str, Path]) -> tuple[Path, Path]:
+def write_cmake_consumer_fixture(consumer_root: Path, xcframeworks: dict[str, Path]) -> tuple[Path, Path]:
     source_dir = consumer_root / "src"
     source_dir.mkdir(parents=True, exist_ok=True)
     cmake_lines = [
@@ -854,17 +1292,22 @@ def write_consumer_fixture(consumer_root: Path, xcframeworks: dict[str, Path]) -
         source_path = source_dir / f"{definition.target_name}.c"
         source_path.write_text(definition.consumer_source, encoding="utf-8")
 
-        library_root = xcframeworks[definition.target_name] / "macos-arm64_x86_64"
+        library_root = (
+            xcframeworks[definition.target_name]
+            / "macos-arm64_x86_64"
+            / f"{definition.target_name}.framework"
+        )
         header_dir = library_root / "Headers"
-        dylibs = []
+        frameworks = []
         for dependency_name in definition.consumer_dependencies:
             dependency = artifact_definition_by_name(dependency_name)
-            dylibs.append(
+            frameworks.append(
                 cmake_quote(
                     str(
                         xcframeworks[dependency.target_name]
                         / "macos-arm64_x86_64"
-                        / dependency.library_name
+                        / f"{dependency.target_name}.framework"
+                        / framework_binary_name(dependency.target_name)
                     )
                 )
             )
@@ -877,7 +1320,7 @@ def write_consumer_fixture(consumer_root: Path, xcframeworks: dict[str, Path]) -
                 "target_link_libraries("
                 + target_name
                 + " PRIVATE "
-                + " ".join(f'"{dylib}"' for dylib in dylibs)
+                + " ".join(f'"{framework}"' for framework in frameworks)
                 + ")",
                 "set_target_properties("
                 + target_name
@@ -892,12 +1335,17 @@ def write_consumer_fixture(consumer_root: Path, xcframeworks: dict[str, Path]) -
     cmake_path.write_text("\n".join(cmake_lines), encoding="utf-8")
     build_dir = consumer_root / "build"
     run_command(["cmake", "-S", str(consumer_root), "-B", str(build_dir), "-G", "Xcode"])
-    project_path = find_single_path(build_dir, "*.xcodeproj")
+    project_paths = sorted(build_dir.glob("*.xcodeproj"))
+    if len(project_paths) != 1:
+        raise RuntimeError(
+            f"Expected exactly one top-level Xcode project in {build_dir}, found {len(project_paths)}"
+        )
+    project_path = project_paths[0]
     return project_path, build_dir
 
 
-def verify_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -> None:
-    project_path, build_dir = write_consumer_fixture(work_dir / "consumer-fixture", xcframeworks)
+def verify_cmake_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -> None:
+    project_path, build_dir = write_cmake_consumer_fixture(work_dir / "consumer-fixture", xcframeworks)
 
     run_command(
         [
@@ -949,10 +1397,129 @@ def verify_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -> No
             raise RuntimeError(f"Missing Release consumer binary: {release_binary}")
 
         debug_otool = command_output(["otool", "-L", str(debug_binary)])
-        if definition.library_name not in debug_otool:
+        if framework_install_name(definition.target_name) not in debug_otool:
             raise RuntimeError(
-                f"Debug consumer binary for {definition.target_name} is not linked against {definition.library_name}"
+                "Debug consumer binary for "
+                + f"{definition.target_name} is not linked against {framework_install_name(definition.target_name)}"
             )
+
+
+def write_spm_binary_package_fixture(binary_package_root: Path, xcframeworks: dict[str, Path]) -> Path:
+    binary_package_root.mkdir(parents=True, exist_ok=True)
+    artifacts_root = binary_package_root / "Artifacts"
+    artifacts_root.mkdir(parents=True, exist_ok=True)
+    fixture_paths: dict[str, Path] = {}
+    for target_name, xcframework_path in xcframeworks.items():
+        link_path = artifacts_root / xcframework_path.name
+        if link_path.exists() or link_path.is_symlink():
+            if link_path.is_dir() and not link_path.is_symlink():
+                shutil.rmtree(link_path)
+            else:
+                link_path.unlink()
+        link_path.symlink_to(xcframework_path.resolve(), target_is_directory=True)
+        fixture_paths[target_name] = Path("Artifacts") / xcframework_path.name
+
+    manifest_path = binary_package_root / "Package.swift"
+    manifest_path.write_text(
+        render_local_binary_package_swift(
+            package_name="LocalLibWebPBinary",
+            xcframework_paths=fixture_paths,
+        ),
+        encoding="utf-8",
+    )
+    return binary_package_root
+
+
+def write_spm_consumer_fixture(consumer_root: Path, binary_package_root: Path) -> Path:
+    sources_dir = consumer_root / "Sources" / "SpmSmokeConsumer"
+    sources_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = consumer_root / "Package.swift"
+    manifest_path.write_text(
+        render_spm_consumer_package_swift(
+            binary_package_name="LocalLibWebPBinary",
+            binary_package_path=os.path.relpath(binary_package_root, consumer_root),
+        ),
+        encoding="utf-8",
+    )
+    for file_name, source in render_spm_consumer_sources().items():
+        (sources_dir / file_name).write_text(source, encoding="utf-8")
+    return consumer_root
+
+
+def verify_spm_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -> None:
+    binary_package_root = write_spm_binary_package_fixture(
+        work_dir / "spm-binary-package",
+        xcframeworks,
+    )
+    consumer_root = write_spm_consumer_fixture(
+        work_dir / "spm-consumer-fixture",
+        binary_package_root,
+    )
+    derived_data_path = work_dir / "spm-consumer-derived-data"
+    scheme_name = "spm-libwebp-consumer"
+
+    run_command(["swift", "package", "dump-package"], cwd=binary_package_root, capture_output=True)
+    run_command(["swift", "package", "dump-package"], cwd=consumer_root, capture_output=True)
+
+    run_command(
+        [
+            "xcodebuild",
+            "-scheme",
+            scheme_name,
+            "-configuration",
+            "Debug",
+            "-derivedDataPath",
+            str(derived_data_path),
+            "-destination",
+            "platform=macOS",
+            "build",
+        ],
+        cwd=consumer_root,
+        capture_output=True,
+    )
+
+    release_result = run_command(
+        [
+            "xcodebuild",
+            "-scheme",
+            scheme_name,
+            "-configuration",
+            "Release",
+            "-derivedDataPath",
+            str(derived_data_path),
+            "-destination",
+            "platform=macOS",
+            "MERGED_BINARY_TYPE=automatic",
+            "build",
+        ],
+        cwd=consumer_root,
+        capture_output=True,
+    )
+    release_output = "\n".join(
+        fragment for fragment in (release_result.stdout, release_result.stderr) if fragment
+    )
+    if "MERGED_BINARY_TYPE = automatic" not in release_output:
+        raise RuntimeError("SwiftPM release consumer build did not honor MERGED_BINARY_TYPE=automatic")
+
+    debug_binary = derived_data_path / "Build" / "Products" / "Debug" / "SpmSmokeConsumer"
+    release_binary = derived_data_path / "Build" / "Products" / "Release" / "SpmSmokeConsumer"
+    if not debug_binary.exists():
+        raise RuntimeError(f"Missing SwiftPM Debug consumer binary: {debug_binary}")
+    if not release_binary.exists():
+        raise RuntimeError(f"Missing SwiftPM Release consumer binary: {release_binary}")
+
+    debug_otool = command_output(["otool", "-L", str(debug_binary)])
+    for definition in ARTIFACT_DEFINITIONS:
+        if framework_install_name(definition.target_name) not in debug_otool:
+            raise RuntimeError(
+                "SwiftPM Debug consumer binary is not linked against "
+                + framework_install_name(definition.target_name)
+            )
+
+
+def verify_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -> None:
+    verify_cmake_consumer_fixture(xcframeworks, work_dir)
+    verify_spm_consumer_fixture(xcframeworks, work_dir)
 
 
 def zip_xcframeworks(tag: str, xcframeworks: dict[str, Path], output_dir: Path) -> list[Path]:
@@ -1061,6 +1628,16 @@ def command_release_artifacts(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_release_publish_plan(args: argparse.Namespace) -> int:
+    plan = plan_release_publication(
+        tag=args.tag,
+        remote_tag_exists=args.tag_exists,
+        release_asset_names=args.assets,
+    )
+    print(json.dumps(dataclasses.asdict(plan), indent=2))
+    return 0
+
+
 def command_print_build_plan(_: argparse.Namespace) -> int:
     print(json.dumps(build_plan_payload(), indent=2))
     return 0
@@ -1123,6 +1700,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     release_artifacts_parser.add_argument("--tag", required=True)
     release_artifacts_parser.set_defaults(func=command_release_artifacts)
+
+    release_publish_plan_parser = subparsers.add_parser(
+        "release-publish-plan",
+        help="Plan whether a tag should publish fresh assets, repair an incomplete release, or skip.",
+    )
+    release_publish_plan_parser.add_argument("--tag", required=True)
+    release_publish_plan_parser.add_argument("--tag-exists", action="store_true")
+    release_publish_plan_parser.add_argument("--asset", dest="assets", action="append", default=[])
+    release_publish_plan_parser.set_defaults(func=command_release_publish_plan)
 
     build_plan_parser = subparsers.add_parser(
         "print-build-plan",

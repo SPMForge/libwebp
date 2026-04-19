@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -100,6 +101,8 @@ class ReleaseArtifactTests(unittest.TestCase):
         )
 
         self.assertIn('.library(name: "WebP", targets: ["WebP"])', package_swift)
+        self.assertIn('.library(name: "WebPDemux", targets: ["WebPDemux", "WebP"])', package_swift)
+        self.assertIn('.library(name: "WebPMux", targets: ["WebPMux", "WebP"])', package_swift)
         self.assertIn(
             'url: "https://github.com/RbBtSn0w/spm-libwebp/releases/download/v1.6.0/WebP-v1.6.0.xcframework.zip"',
             package_swift,
@@ -121,6 +124,61 @@ class ReleaseArtifactTests(unittest.TestCase):
                     "WebPMux": "4" * 64,
                 },
             )
+
+
+class ReleasePublicationPlanTests(unittest.TestCase):
+    def test_required_release_asset_names_include_archives_and_checksums(self):
+        module = load_spm_release_module()
+
+        self.assertEqual(
+            module.required_release_asset_names("v1.6.0"),
+            (
+                "WebP-v1.6.0.xcframework.zip",
+                "WebPDecoder-v1.6.0.xcframework.zip",
+                "WebPDemux-v1.6.0.xcframework.zip",
+                "WebPMux-v1.6.0.xcframework.zip",
+                "SharpYuv-v1.6.0.xcframework.zip",
+                "checksums.json",
+            ),
+        )
+
+    def test_plan_release_publication_uses_fresh_mode_for_new_tags(self):
+        module = load_spm_release_module()
+
+        plan = module.plan_release_publication(
+            tag="v1.6.0",
+            remote_tag_exists=False,
+            release_asset_names=(),
+        )
+
+        self.assertEqual(plan.mode, "fresh")
+        self.assertEqual(plan.missing_assets, module.required_release_asset_names("v1.6.0"))
+
+    def test_plan_release_publication_uses_repair_mode_when_assets_are_missing(self):
+        module = load_spm_release_module()
+
+        plan = module.plan_release_publication(
+            tag="v1.6.0",
+            remote_tag_exists=True,
+            release_asset_names=("WebP-v1.6.0.xcframework.zip",),
+        )
+
+        self.assertEqual(plan.mode, "repair")
+        self.assertIn("checksums.json", plan.missing_assets)
+        self.assertIn("SharpYuv-v1.6.0.xcframework.zip", plan.missing_assets)
+
+    def test_plan_release_publication_uses_skip_mode_when_release_is_complete(self):
+        module = load_spm_release_module()
+
+        required_assets = module.required_release_asset_names("v1.6.0")
+        plan = module.plan_release_publication(
+            tag="v1.6.0",
+            remote_tag_exists=True,
+            release_asset_names=required_assets,
+        )
+
+        self.assertEqual(plan.mode, "skip")
+        self.assertEqual(plan.missing_assets, ())
 
 
 class ReleaseCommandTests(unittest.TestCase):
@@ -180,6 +238,95 @@ class SourceTreeTests(unittest.TestCase):
             self.assertFalse((working_source / "stale.txt").exists())
 
 
+class HeaderLayoutTests(unittest.TestCase):
+    def test_header_include_path_drops_src_prefix_for_webp_headers(self):
+        module = load_spm_release_module()
+
+        include_path = module.header_include_path("WebPDemux", "src/webp/demux.h")
+
+        self.assertEqual(include_path, Path("webp/demux.h"))
+
+    def test_header_include_path_preserves_non_src_roots(self):
+        module = load_spm_release_module()
+
+        include_path = module.header_include_path("SharpYuv", "sharpyuv/sharpyuv_csp.h")
+
+        self.assertEqual(include_path, Path("sharpyuv/sharpyuv_csp.h"))
+
+    def test_rewrite_public_header_text_fixes_sharpyuv_self_include_for_framework_packaging(self):
+        module = load_spm_release_module()
+
+        rewritten = module.rewrite_public_header_text(
+            "SharpYuv",
+            "sharpyuv/sharpyuv_csp.h",
+            '#include "sharpyuv/sharpyuv.h"\n',
+        )
+
+        self.assertEqual(rewritten, '#include "./sharpyuv.h"\n')
+
+
+class SwiftPMFixtureTests(unittest.TestCase):
+    def test_render_local_binary_package_swift_uses_path_based_binary_targets(self):
+        module = load_spm_release_module()
+
+        package_swift = module.render_local_binary_package_swift(
+            package_name="LocalLibWebPBinary",
+            xcframework_paths={
+                definition.target_name: Path(f"Artifacts/{definition.target_name}.xcframework")
+                for definition in module.ARTIFACT_DEFINITIONS
+            },
+        )
+
+        self.assertIn('name: "LocalLibWebPBinary"', package_swift)
+        self.assertIn('.library(name: "WebPDemux", targets: ["WebPDemux", "WebP"])', package_swift)
+        self.assertIn('.library(name: "WebPMux", targets: ["WebPMux", "WebP"])', package_swift)
+        self.assertIn('path: "Artifacts/WebP.xcframework"', package_swift)
+        self.assertNotIn('url: "https://github.com/', package_swift)
+
+    def test_render_spm_consumer_package_swift_depends_on_all_binary_products(self):
+        module = load_spm_release_module()
+
+        package_swift = module.render_spm_consumer_package_swift(
+            binary_package_name="LocalLibWebPBinary",
+            binary_package_path="../LocalLibWebPBinary",
+        )
+
+        self.assertIn('.package(name: "LocalLibWebPBinary", path: "../LocalLibWebPBinary")', package_swift)
+        self.assertIn('.product(name: "WebP", package: "LocalLibWebPBinary")', package_swift)
+        self.assertIn('.product(name: "WebPMux", package: "LocalLibWebPBinary")', package_swift)
+        self.assertIn('.product(name: "SharpYuv", package: "LocalLibWebPBinary")', package_swift)
+
+    def test_render_spm_consumer_sources_create_one_probe_per_public_module(self):
+        module = load_spm_release_module()
+
+        sources = module.render_spm_consumer_sources()
+
+        self.assertEqual(
+            sorted(sources),
+            [
+                "App.swift",
+                "SharpYuvProbe.swift",
+                "WebPDecoderProbe.swift",
+                "WebPDemuxProbe.swift",
+                "WebPMuxProbe.swift",
+                "WebPProbe.swift",
+            ],
+        )
+        self.assertIn("@main", sources["App.swift"])
+        self.assertIn("runWebPProbe()", sources["App.swift"])
+        self.assertIn("runSharpYuvProbe()", sources["App.swift"])
+        self.assertIn("import WebP", sources["WebPProbe.swift"])
+        self.assertIn("WebPGetEncoderVersion()", sources["WebPProbe.swift"])
+        self.assertIn("import WebPDecoder", sources["WebPDecoderProbe.swift"])
+        self.assertIn("WebPGetDecoderVersion()", sources["WebPDecoderProbe.swift"])
+        self.assertIn("import WebPDemux", sources["WebPDemuxProbe.swift"])
+        self.assertIn("WebPDemuxGetI(nil, WEBP_FF_CANVAS_WIDTH)", sources["WebPDemuxProbe.swift"])
+        self.assertIn("import WebPMux", sources["WebPMuxProbe.swift"])
+        self.assertIn("WebPMuxNew()", sources["WebPMuxProbe.swift"])
+        self.assertIn("import SharpYuv", sources["SharpYuvProbe.swift"])
+        self.assertIn("SharpYuvGetVersion()", sources["SharpYuvProbe.swift"])
+
+
 class BuildPlanTests(unittest.TestCase):
     def test_build_script_print_plan_covers_all_apple_platform_groups(self):
         if not BUILD_SCRIPT_PATH.exists():
@@ -231,6 +378,9 @@ class CMakeConfigurationTests(unittest.TestCase):
         self.assertIn("-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64", arguments)
         self.assertIn("-DCMAKE_OSX_SYSROOT=iphonesimulator", arguments)
         self.assertIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0", arguments)
+        self.assertIn("-DCMAKE_SYSTEM_NAME=iOS", arguments)
+        self.assertIn("-DCMAKE_XCODE_ATTRIBUTE_SUPPORTS_MACCATALYST=NO", arguments)
+        self.assertEqual(ios_simulator.destination, "generic/platform=iOS Simulator")
 
     def test_single_arch_platforms_still_configure_explicit_cmake_architectures(self):
         module = load_spm_release_module()
@@ -241,6 +391,9 @@ class CMakeConfigurationTests(unittest.TestCase):
         self.assertIn("-DCMAKE_OSX_ARCHITECTURES=arm64", arguments)
         self.assertIn("-DCMAKE_OSX_SYSROOT=iphoneos", arguments)
         self.assertIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0", arguments)
+        self.assertIn("-DCMAKE_SYSTEM_NAME=iOS", arguments)
+        self.assertIn("-DCMAKE_XCODE_ATTRIBUTE_SUPPORTS_MACCATALYST=NO", arguments)
+        self.assertEqual(ios_device.destination, "generic/platform=iOS")
 
     def test_watchos_configures_with_universal_architectures_and_cross_compile_sysroot(self):
         module = load_spm_release_module()
@@ -252,6 +405,106 @@ class CMakeConfigurationTests(unittest.TestCase):
         self.assertIn("-DCMAKE_OSX_ARCHITECTURES=arm64;arm64_32", arguments)
         self.assertIn("-DCMAKE_OSX_SYSROOT=watchos", arguments)
         self.assertIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=8.0", arguments)
+        self.assertIn("-DCMAKE_SYSTEM_NAME=watchOS", arguments)
+        self.assertIn("-DCMAKE_XCODE_ATTRIBUTE_SUPPORTS_MACCATALYST=NO", arguments)
+        self.assertEqual(watchos.destination, "generic/platform=watchOS")
+
+    def test_mac_catalyst_only_enables_supports_maccatalyst_for_catalyst_slice(self):
+        module = load_spm_release_module()
+
+        mac_catalyst = next(
+            group for group in module.PLATFORM_GROUPS if group.identifier == "mac-catalyst"
+        )
+        arguments = module.cmake_configuration_args_for_platform_group(mac_catalyst)
+
+        self.assertIn("-DCMAKE_XCODE_ATTRIBUTE_SUPPORTS_MACCATALYST=YES", arguments)
+        self.assertNotIn("-DCMAKE_SYSTEM_NAME=iOS", arguments)
+        self.assertEqual(mac_catalyst.destination, "generic/platform=macOS,variant=Mac Catalyst")
+
+
+class BuildArchiveTests(unittest.TestCase):
+    def test_assert_destination_available_accepts_matching_available_destination(self):
+        module = load_spm_release_module()
+
+        watchos = next(group for group in module.PLATFORM_GROUPS if group.identifier == "watchos")
+
+        with mock.patch.object(
+            module,
+            "command_output",
+            return_value=(
+                '\n\tAvailable destinations for the "webp" scheme:\n'
+                "\t\t{ platform:watchOS, id:dvtdevice-DVTiOSDevicePlaceholder-watchos:placeholder, name:Any watchOS Device }\n"
+            ),
+        ):
+            module.assert_destination_available(
+                project_path=Path("/tmp/WebP.xcodeproj"),
+                scheme="webp",
+                platform_group=watchos,
+            )
+
+    def test_assert_destination_available_fails_fast_on_ineligible_destination(self):
+        module = load_spm_release_module()
+
+        watchos = next(group for group in module.PLATFORM_GROUPS if group.identifier == "watchos")
+
+        with mock.patch.object(
+            module,
+            "command_output",
+            return_value=(
+                '\n\tAvailable destinations for the "webp" scheme:\n'
+                "\t\t{ platform:macOS, variant:Mac Catalyst, name:Any Mac }\n\n"
+                '\tIneligible destinations for the "webp" scheme:\n'
+                "\t\t{ platform:watchOS, id:dvtdevice-DVTiOSDevicePlaceholder-watchos:placeholder, name:Any watchOS Device, error:watchOS 26.4 is not installed. }\n"
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "xcodebuild -downloadPlatform watchOS"):
+                module.assert_destination_available(
+                    project_path=Path("/tmp/WebP.xcodeproj"),
+                    scheme="webp",
+                    platform_group=watchos,
+                )
+
+    def test_build_archive_uses_explicit_destination_and_validates_platform_metadata(self):
+        module = load_spm_release_module()
+
+        artifact_definition = next(
+            definition for definition in module.ARTIFACT_DEFINITIONS if definition.target_name == "WebP"
+        )
+        watchos = next(group for group in module.PLATFORM_GROUPS if group.identifier == "watchos")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            project_path = temp_path / "WebP.xcodeproj"
+            project_path.touch()
+            binary_path = temp_path / "libwebp.dylib"
+            binary_path.touch()
+
+            with (
+                mock.patch.object(module, "run_command") as run_command,
+                mock.patch.object(module, "find_built_dynamic_library", return_value=binary_path),
+                mock.patch.object(module, "validate_binary_platform") as validate_binary_platform,
+                mock.patch.object(module, "assert_destination_available") as assert_destination_available,
+            ):
+                built_slice = module.build_archive_for_slice(
+                    project_path=project_path,
+                    artifact_definition=artifact_definition,
+                    platform_group=watchos,
+                    archives_root=temp_path / "archives",
+                )
+
+        arguments = run_command.call_args.args[0]
+        self.assertIn("-destination", arguments)
+        self.assertIn("generic/platform=watchOS", arguments)
+        assert_destination_available.assert_called_once_with(
+            project_path=project_path,
+            scheme=artifact_definition.cmake_target,
+            platform_group=watchos,
+        )
+        validate_binary_platform.assert_called_once_with(
+            binary_path,
+            watchos.expected_vtool_platform,
+        )
+        self.assertEqual(built_slice.binary_path, binary_path)
 
 if __name__ == "__main__":
     unittest.main()
