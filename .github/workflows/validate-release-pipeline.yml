@@ -1,0 +1,103 @@
+name: validate-release-pipeline
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-release-pipeline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: macos-15
+    env:
+      REPOSITORY_OWNER: ${{ github.repository_owner }}
+      REPOSITORY_NAME: ${{ github.event.repository.name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Verify build prerequisites
+        run: |
+          set -euo pipefail
+
+          command -v cmake >/dev/null 2>&1 || brew install cmake
+          command -v xcodebuild >/dev/null
+          command -v swift >/dev/null
+          command -v plutil >/dev/null
+          xcrun --find vtool >/dev/null
+          xcrun --sdk iphoneos --show-sdk-path >/dev/null
+          xcrun --sdk iphonesimulator --show-sdk-path >/dev/null
+          xcrun --sdk macosx --show-sdk-path >/dev/null
+          xcrun --sdk appletvos --show-sdk-path >/dev/null
+          xcrun --sdk appletvsimulator --show-sdk-path >/dev/null
+          xcrun --sdk watchos --show-sdk-path >/dev/null
+          xcrun --sdk watchsimulator --show-sdk-path >/dev/null
+          xcrun --sdk xros --show-sdk-path >/dev/null
+          xcrun --sdk xrsimulator --show-sdk-path >/dev/null
+
+      - name: Fetch upstream tag refs
+        run: |
+          set -euo pipefail
+
+          if git remote get-url upstream >/dev/null 2>&1; then
+            git remote set-url upstream https://github.com/webmproject/libwebp.git
+          else
+            git remote add upstream https://github.com/webmproject/libwebp.git
+          fi
+          git fetch --force upstream 'refs/tags/*:refs/upstream-tags/*'
+
+      - name: Select latest stable upstream tag
+        id: release_tag
+        run: |
+          set -euo pipefail
+
+          target_tag="$(
+            git for-each-ref --format='%(refname:lstrip=2)' refs/upstream-tags \
+              | python3 scripts/spm_release.py latest-stable-tag
+          )"
+          echo "target_tag=${target_tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run unit tests
+        run: |
+          set -euo pipefail
+
+          python3 -m unittest tests/test_spm_release.py
+
+      - name: Validate workflow YAML
+        run: |
+          set -euo pipefail
+
+          ruby -e 'require "yaml"; Dir[".github/workflows/*.yml"].sort.each { |path| YAML.load_file(path) }; puts "workflow-yaml-ok"'
+
+      - name: Build and validate Apple XCFramework artifacts
+        run: |
+          set -euo pipefail
+
+          artifacts_dir="${RUNNER_TEMP}/validation-artifacts"
+          rm -rf "${artifacts_dir}"
+          mkdir -p "${artifacts_dir}"
+
+          ./scripts/build_apple_xcframeworks.sh \
+            --source-dir "${GITHUB_WORKSPACE}" \
+            --output-dir "${artifacts_dir}" \
+            --tag "${{ steps.release_tag.outputs.target_tag }}"
+
+      - name: Upload validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-xcframework-validation-${{ github.run_id }}
+          path: ${{ runner.temp }}/validation-artifacts
+          if-no-files-found: ignore
