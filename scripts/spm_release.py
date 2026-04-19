@@ -65,6 +65,10 @@ class PlatformGroup:
     supported_platform_variant: str | None = None
     destination: str | None = None
 
+    @property
+    def cmake_architectures(self) -> str:
+        return ";".join(self.architectures)
+
     def build_settings(self) -> list[str]:
         settings = [
             f"SDKROOT={self.sdk}",
@@ -88,6 +92,7 @@ class PlatformGroup:
             "deployment_setting": self.deployment_setting,
             "minimum_version": self.minimum_version,
             "architectures": list(self.architectures),
+            "cmake_architectures": self.cmake_architectures,
             "expected_vtool_platform": self.expected_vtool_platform,
             "simulator": self.simulator,
             "catalyst": self.catalyst,
@@ -572,7 +577,19 @@ def copy_source_tree(source_dir: Path, destination_dir: Path) -> Path:
     return working_source
 
 
-def configure_cmake_project(source_dir: Path, build_dir: Path) -> Path:
+def cmake_configuration_args_for_platform_group(platform_group: PlatformGroup) -> tuple[str, ...]:
+    # The Xcode generator needs the target architectures at configure time.
+    # Passing only ARCHS during archive can produce object library references
+    # that point at the wrong architecture directory in universal builds.
+    return (*CMAKE_CONFIGURATION_ARGS, f"-DCMAKE_OSX_ARCHITECTURES={platform_group.cmake_architectures}")
+
+
+def configure_cmake_project(
+    source_dir: Path,
+    build_dir: Path,
+    *,
+    platform_group: PlatformGroup,
+) -> Path:
     build_dir.mkdir(parents=True, exist_ok=True)
     run_command(
         [
@@ -583,7 +600,7 @@ def configure_cmake_project(source_dir: Path, build_dir: Path) -> Path:
             str(build_dir),
             "-G",
             "Xcode",
-            *CMAKE_CONFIGURATION_ARGS,
+            *cmake_configuration_args_for_platform_group(platform_group),
         ]
     )
 
@@ -691,14 +708,21 @@ def build_archive_for_slice(
 
 
 def build_archived_libraries(
-    project_path: Path,
+    *,
+    source_dir: Path,
+    build_root: Path,
     archives_root: Path,
 ) -> dict[str, list[BuiltSlice]]:
     build_output: dict[str, list[BuiltSlice]] = {
         definition.target_name: [] for definition in ARTIFACT_DEFINITIONS
     }
-    for definition in ARTIFACT_DEFINITIONS:
-        for group in PLATFORM_GROUPS:
+    for group in PLATFORM_GROUPS:
+        project_path = configure_cmake_project(
+            source_dir,
+            build_root / group.identifier,
+            platform_group=group,
+        )
+        for definition in ARTIFACT_DEFINITIONS:
             build_output[definition.target_name].append(
                 build_archive_for_slice(
                     project_path=project_path,
@@ -972,9 +996,12 @@ def build_xcframework_archives(
     try:
         working_source = copy_source_tree(source_dir, root_dir)
         ensure_source_tree_is_buildable(working_source)
-        project_path = configure_cmake_project(working_source, root_dir / "cmake-build")
         header_paths = prepare_header_directories(working_source, root_dir / "headers")
-        build_output = build_archived_libraries(project_path, root_dir / "archives")
+        build_output = build_archived_libraries(
+            source_dir=working_source,
+            build_root=root_dir / "cmake-build",
+            archives_root=root_dir / "archives",
+        )
         xcframework_root = root_dir / "xcframeworks"
         xcframeworks = create_xcframeworks(xcframework_root, build_output, header_paths)
         validate_xcframeworks(xcframeworks)
