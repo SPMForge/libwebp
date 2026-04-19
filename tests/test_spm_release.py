@@ -229,6 +229,8 @@ class CMakeConfigurationTests(unittest.TestCase):
         arguments = module.cmake_configuration_args_for_platform_group(ios_simulator)
 
         self.assertIn("-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64", arguments)
+        self.assertIn("-DCMAKE_OSX_SYSROOT=iphonesimulator", arguments)
+        self.assertIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0", arguments)
 
     def test_single_arch_platforms_still_configure_explicit_cmake_architectures(self):
         module = load_spm_release_module()
@@ -237,7 +239,19 @@ class CMakeConfigurationTests(unittest.TestCase):
         arguments = module.cmake_configuration_args_for_platform_group(ios_device)
 
         self.assertIn("-DCMAKE_OSX_ARCHITECTURES=arm64", arguments)
+        self.assertIn("-DCMAKE_OSX_SYSROOT=iphoneos", arguments)
+        self.assertIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=13.0", arguments)
 
+    def test_watchos_configures_with_universal_architectures_and_cross_compile_sysroot(self):
+        module = load_spm_release_module()
+
+        watchos = next(group for group in module.PLATFORM_GROUPS if group.identifier == "watchos")
+        arguments = module.cmake_configuration_args_for_platform_group(watchos)
+
+        self.assertEqual(watchos.architectures, ("arm64", "arm64_32"))
+        self.assertIn("-DCMAKE_OSX_ARCHITECTURES=arm64;arm64_32", arguments)
+        self.assertIn("-DCMAKE_OSX_SYSROOT=watchos", arguments)
+        self.assertIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=8.0", arguments)
 
 if __name__ == "__main__":
     unittest.main()

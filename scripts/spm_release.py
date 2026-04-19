@@ -581,7 +581,12 @@ def cmake_configuration_args_for_platform_group(platform_group: PlatformGroup) -
     # The Xcode generator needs the target architectures at configure time.
     # Passing only ARCHS during archive can produce object library references
     # that point at the wrong architecture directory in universal builds.
-    return (*CMAKE_CONFIGURATION_ARGS, f"-DCMAKE_OSX_ARCHITECTURES={platform_group.cmake_architectures}")
+    return (
+        *CMAKE_CONFIGURATION_ARGS,
+        f"-DCMAKE_OSX_ARCHITECTURES={platform_group.cmake_architectures}",
+        f"-DCMAKE_OSX_SYSROOT={platform_group.sdk}",
+        f"-DCMAKE_OSX_DEPLOYMENT_TARGET={platform_group.minimum_version}",
+    )
 
 
 def configure_cmake_project(
