@@ -60,7 +60,7 @@ jobs:
           set -euo pipefail
 
           target_tag="$(
-            git for-each-ref --format='%(refname:lstrip=3)' refs/upstream-tags \
+            git for-each-ref --format='%(refname:lstrip=2)' refs/upstream-tags \
               | python3 scripts/spm_release.py latest-stable-tag
           )"
           upstream_commit="$(git rev-parse "refs/upstream-tags/${target_tag}^{commit}")"
@@ -152,11 +152,11 @@ jobs:
           git switch --create "${release_branch}"
 
           cp "${{ steps.build.outputs.metadata_dir }}/Package.swift" Package.swift
+          git add Package.swift
 
-          if git diff --quiet -- Package.swift; then
+          if git diff --cached --quiet -- Package.swift; then
             commit_sha="$(git rev-parse HEAD)"
           else
-            git add Package.swift
             git commit -m "Release ${{ steps.release_tag.outputs.target_tag }}"
             commit_sha="$(git rev-parse HEAD)"
           fi

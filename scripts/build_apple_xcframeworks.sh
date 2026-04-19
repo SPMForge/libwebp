@@ -3,7 +3,6 @@
 set -euo pipefail
 
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 readonly PYENV_BIN="/opt/homebrew/bin/pyenv"
 
 if [[ "${1:-}" == "--print-build-plan" ]]; then

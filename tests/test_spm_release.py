@@ -2,6 +2,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -120,6 +121,63 @@ class ReleaseArtifactTests(unittest.TestCase):
                     "WebPMux": "4" * 64,
                 },
             )
+
+
+class ReleaseCommandTests(unittest.TestCase):
+    def test_command_render_package_swift_rejects_non_object_checksum_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            checksums_path = temp_path / "checksums.json"
+            output_path = temp_path / "Package.swift"
+            checksums_path.write_text('["not-a-dict"]', encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE_PATH),
+                    "render-package-swift",
+                    "--owner",
+                    "SPMForge",
+                    "--repository",
+                    "libwebp",
+                    "--tag",
+                    "v1.6.0",
+                    "--checksums-json",
+                    str(checksums_path),
+                    "--output",
+                    str(output_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertRegex(result.stderr, "Checksum JSON must be an object")
+
+
+class SourceTreeTests(unittest.TestCase):
+    def test_copy_source_tree_reuses_existing_destination(self):
+        module = load_spm_release_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_dir = temp_path / "source-input"
+            source_dir.mkdir()
+            (source_dir / "CMakeLists.txt").write_text("cmake_minimum_required(VERSION 3.16)\n", encoding="utf-8")
+            (source_dir / "keep.txt").write_text("fresh\n", encoding="utf-8")
+
+            destination_dir = temp_path / "working"
+            working_source = destination_dir / "source"
+            working_source.mkdir(parents=True)
+            (working_source / "stale.txt").write_text("stale\n", encoding="utf-8")
+
+            copied_path = module.copy_source_tree(source_dir, destination_dir)
+
+            self.assertEqual(copied_path, working_source)
+            self.assertTrue((working_source / "CMakeLists.txt").exists())
+            self.assertEqual((working_source / "keep.txt").read_text(encoding="utf-8"), "fresh\n")
+            self.assertFalse((working_source / "stale.txt").exists())
 
 
 class BuildPlanTests(unittest.TestCase):

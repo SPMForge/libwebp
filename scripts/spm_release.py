@@ -462,6 +462,24 @@ def render_package_swift(
     )
 
 
+def validate_checksums_payload(raw_checksums: object) -> dict[str, str]:
+    if not isinstance(raw_checksums, dict):
+        raise ValueError("Checksum JSON must be an object mapping target names to checksum strings.")
+
+    invalid_entries = sorted(
+        str(target_name)
+        for target_name, checksum in raw_checksums.items()
+        if not isinstance(target_name, str) or not isinstance(checksum, str)
+    )
+    if invalid_entries:
+        raise ValueError(
+            "Checksum JSON values must be string pairs keyed by target name. Invalid entries: "
+            + ", ".join(invalid_entries)
+        )
+
+    return raw_checksums
+
+
 def build_plan_payload() -> dict[str, object]:
     return {
         "platform_groups": [group.to_dict() for group in PLATFORM_GROUPS],
@@ -548,6 +566,8 @@ def copy_source_tree(source_dir: Path, destination_dir: Path) -> Path:
         "xcframeworkbuild",
     )
     working_source = destination_dir / "source"
+    if working_source.exists():
+        shutil.rmtree(working_source)
     shutil.copytree(source_dir, working_source, ignore=ignored_names)
     return working_source
 
@@ -1015,7 +1035,9 @@ def command_print_build_plan(_: argparse.Namespace) -> int:
 
 
 def command_render_package_swift(args: argparse.Namespace) -> int:
-    checksums = json.loads(Path(args.checksums_json).read_text(encoding="utf-8"))
+    checksums = validate_checksums_payload(
+        json.loads(Path(args.checksums_json).read_text(encoding="utf-8"))
+    )
     package_swift = render_package_swift(
         owner=args.owner,
         repository=args.repository,
