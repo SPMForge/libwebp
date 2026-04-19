@@ -216,6 +216,27 @@ class BuildPlanTests(unittest.TestCase):
             group for group in plan["platform_groups"] if group["name"] == "watchOS"
         )
         self.assertEqual(watchos_group["architectures"], ["arm64", "arm64_32"])
+        self.assertEqual(watchos_group["cmake_architectures"], "arm64;arm64_32")
+
+
+class CMakeConfigurationTests(unittest.TestCase):
+    def test_platform_specific_cmake_args_pin_universal_architectures(self):
+        module = load_spm_release_module()
+
+        ios_simulator = next(
+            group for group in module.PLATFORM_GROUPS if group.identifier == "ios-simulator"
+        )
+        arguments = module.cmake_configuration_args_for_platform_group(ios_simulator)
+
+        self.assertIn("-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64", arguments)
+
+    def test_single_arch_platforms_still_configure_explicit_cmake_architectures(self):
+        module = load_spm_release_module()
+
+        ios_device = next(group for group in module.PLATFORM_GROUPS if group.identifier == "ios")
+        arguments = module.cmake_configuration_args_for_platform_group(ios_device)
+
+        self.assertIn("-DCMAKE_OSX_ARCHITECTURES=arm64", arguments)
 
 
 if __name__ == "__main__":
