@@ -1,0 +1,189 @@
+name: release-latest-stable
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-latest-stable
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    env:
+      REPOSITORY_OWNER: ${{ github.repository_owner }}
+      REPOSITORY_NAME: ${{ github.event.repository.name }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Verify build prerequisites
+        run: |
+          set -euo pipefail
+
+          command -v cmake >/dev/null 2>&1 || brew install cmake
+          command -v xcodebuild >/dev/null
+          command -v swift >/dev/null
+          command -v plutil >/dev/null
+          xcrun --find vtool >/dev/null
+          xcrun --sdk iphoneos --show-sdk-path >/dev/null
+          xcrun --sdk iphonesimulator --show-sdk-path >/dev/null
+          xcrun --sdk macosx --show-sdk-path >/dev/null
+          xcrun --sdk appletvos --show-sdk-path >/dev/null
+          xcrun --sdk appletvsimulator --show-sdk-path >/dev/null
+          xcrun --sdk watchos --show-sdk-path >/dev/null
+          xcrun --sdk watchsimulator --show-sdk-path >/dev/null
+          xcrun --sdk xros --show-sdk-path >/dev/null
+          xcrun --sdk xrsimulator --show-sdk-path >/dev/null
+
+      - name: Fetch upstream tag refs
+        run: |
+          git remote add upstream https://github.com/webmproject/libwebp.git
+          git fetch --force upstream 'refs/tags/*:refs/upstream-tags/*'
+
+      - name: Select latest stable upstream tag
+        id: release_tag
+        run: |
+          set -euo pipefail
+
+          target_tag="$(
+            git for-each-ref --format='%(refname:lstrip=2)' refs/upstream-tags \
+              | python3 scripts/spm_release.py latest-stable-tag
+          )"
+          upstream_commit="$(git rev-parse "refs/upstream-tags/${target_tag}^{commit}")"
+
+          echo "target_tag=${target_tag}" >> "${GITHUB_OUTPUT}"
+          echo "upstream_commit=${upstream_commit}" >> "${GITHUB_OUTPUT}"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${target_tag}" >/dev/null 2>&1; then
+            echo "skip=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          echo "skip=false" >> "${GITHUB_OUTPUT}"
+
+      - name: Export upstream source tree
+        if: steps.release_tag.outputs.skip == 'false'
+        id: source_tree
+        run: |
+          set -euo pipefail
+
+          source_dir="${RUNNER_TEMP}/libwebp-source"
+          rm -rf "${source_dir}"
+          mkdir -p "${source_dir}"
+
+          git archive --format=tar "refs/upstream-tags/${{ steps.release_tag.outputs.target_tag }}" \
+            | tar -xf - -C "${source_dir}"
+
+          echo "source_dir=${source_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build release artifacts
+        if: steps.release_tag.outputs.skip == 'false'
+        id: build
+        run: |
+          set -euo pipefail
+
+          artifacts_dir="${RUNNER_TEMP}/release-artifacts"
+          metadata_dir="${RUNNER_TEMP}/release-metadata"
+          validation_dir="${RUNNER_TEMP}/package-validation"
+
+          rm -rf "${artifacts_dir}" "${metadata_dir}" "${validation_dir}"
+          mkdir -p "${artifacts_dir}" "${metadata_dir}" "${validation_dir}"
+
+          ./scripts/build_apple_xcframeworks.sh \
+            --source-dir "${{ steps.source_tree.outputs.source_dir }}" \
+            --output-dir "${artifacts_dir}" \
+            --tag "${{ steps.release_tag.outputs.target_tag }}"
+
+          python3 scripts/spm_release.py compute-checksums \
+            --archives-dir "${artifacts_dir}" \
+            --output "${metadata_dir}/checksums.json"
+
+          python3 scripts/spm_release.py render-package-swift \
+            --owner "${REPOSITORY_OWNER}" \
+            --repository "${REPOSITORY_NAME}" \
+            --tag "${{ steps.release_tag.outputs.target_tag }}" \
+            --checksums-json "${metadata_dir}/checksums.json" \
+            --output "${metadata_dir}/Package.swift"
+
+          cp "${metadata_dir}/Package.swift" "${validation_dir}/Package.swift"
+          swift package dump-package --package-path "${validation_dir}" >/dev/null
+
+          cat > "${metadata_dir}/release-notes.md" <<EOF
+          Automated mergeable binary release for upstream libwebp ${{ steps.release_tag.outputs.target_tag }}.
+
+          Upstream source commit: ${{ steps.release_tag.outputs.upstream_commit }}
+
+          Published artifacts:
+          - Mergeable WebP.xcframework.zip
+          - Mergeable WebPDecoder.xcframework.zip
+          - Mergeable WebPDemux.xcframework.zip
+          - Mergeable WebPMux.xcframework.zip
+          - Mergeable SharpYuv.xcframework.zip
+          - checksums.json
+          EOF
+
+          echo "artifacts_dir=${artifacts_dir}" >> "${GITHUB_OUTPUT}"
+          echo "metadata_dir=${metadata_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create package commit and push release tag
+        if: steps.release_tag.outputs.skip == 'false'
+        id: git_release
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          release_branch="release/${{ steps.release_tag.outputs.target_tag }}"
+          git switch --create "${release_branch}"
+
+          cp "${{ steps.build.outputs.metadata_dir }}/Package.swift" Package.swift
+          git add Package.swift
+
+          if git diff --cached --quiet -- Package.swift; then
+            commit_sha="$(git rev-parse HEAD)"
+          else
+            git commit -m "Release ${{ steps.release_tag.outputs.target_tag }}"
+            commit_sha="$(git rev-parse HEAD)"
+          fi
+
+          git tag "${{ steps.release_tag.outputs.target_tag }}" "${commit_sha}"
+          git push origin "refs/tags/${{ steps.release_tag.outputs.target_tag }}"
+
+          echo "commit_sha=${commit_sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create GitHub release
+        if: steps.release_tag.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          gh release create "${{ steps.release_tag.outputs.target_tag }}" \
+            "${{ steps.build.outputs.artifacts_dir }}"/*.zip \
+            "${{ steps.build.outputs.metadata_dir }}/checksums.json" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${{ steps.git_release.outputs.commit_sha }}" \
+            --title "${{ steps.release_tag.outputs.target_tag }}" \
+            --notes-file "${{ steps.build.outputs.metadata_dir }}/release-notes.md"
+
+      - name: Update default branch with latest Package.swift
+        if: steps.release_tag.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+
+          git push origin "${{ steps.git_release.outputs.commit_sha }}:refs/heads/${DEFAULT_BRANCH}"
