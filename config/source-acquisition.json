@@ -1,0 +1,7 @@
+{
+  "strategy": "git-tag-export",
+  "upstream_repository_url": "https://github.com/webmproject/libwebp.git",
+  "upstream_tag_namespace": "refs/upstream-tags",
+  "upstream_tag_refspec": "refs/tags/*:refs/upstream-tags/*",
+  "source_snapshot_directory": "libwebp-source"
+}

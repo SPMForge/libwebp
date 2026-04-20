@@ -1,0 +1,42 @@
+name: Publish Upstream Release Manually
+
+run-name: Manual ${{ inputs.release_channel }} publish for ${{ inputs.upstream_tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: Stable upstream libwebp tag to publish, for example v1.6.0
+        required: true
+        type: string
+      release_channel:
+        description: Publish the requested upstream tag as alpha or stable
+        required: true
+        default: alpha
+        type: choice
+        options:
+          - alpha
+          - stable
+      publish_to_main:
+        description: Also update the default branch Package.swift to this version
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-upstream-release-manually-${{ inputs.upstream_tag }}-${{ inputs.release_channel }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish requested upstream release
+    uses: ./.github/workflows/publish-package-release-core.yml
+    with:
+      selection_mode: requested
+      upstream_tag: ${{ inputs.upstream_tag }}
+      release_channel: ${{ inputs.release_channel }}
+      publish_to_main: ${{ inputs.publish_to_main }}
+    secrets: inherit

@@ -1,0 +1,12 @@
+*.py[cod]
+.DS_Store
+.idea
+.vscode
+__pycache__/
+.build/
+build/
+dist/
+output/
+xcframeworkbuild/
+*.xcframework
+*.xcframework.zip

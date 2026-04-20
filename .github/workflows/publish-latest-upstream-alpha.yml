@@ -1,0 +1,25 @@
+name: Publish Latest Upstream Alpha
+
+run-name: Auto alpha publish from latest upstream stable
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-latest-upstream-alpha
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish alpha release
+    uses: ./.github/workflows/publish-package-release-core.yml
+    with:
+      selection_mode: latest
+      release_channel: alpha
+      publish_to_main: true
+    secrets: inherit

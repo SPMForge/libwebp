@@ -1,0 +1,159 @@
+name: Validate Apple Release Pipeline
+
+run-name: Validate pipeline for ${{ github.event_name == 'pull_request' && format('PR {0}', github.event.pull_request.number) || github.ref_name }}
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: Optional stable upstream tag to validate instead of the latest upstream stable release
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-apple-release-pipeline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate release pipeline
+    runs-on: macos-15
+    env:
+      REPOSITORY_OWNER: ${{ github.repository_owner }}
+      REPOSITORY_NAME: ${{ github.event.repository.name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Verify build prerequisites
+        run: |
+          set -euo pipefail
+
+          command -v cmake >/dev/null 2>&1 || brew install cmake
+          command -v xcodebuild >/dev/null
+          command -v swift >/dev/null
+          command -v plutil >/dev/null
+          xcrun --find vtool >/dev/null
+          xcrun --sdk iphoneos --show-sdk-path >/dev/null
+          xcrun --sdk iphonesimulator --show-sdk-path >/dev/null
+          xcrun --sdk macosx --show-sdk-path >/dev/null
+          xcrun --sdk appletvos --show-sdk-path >/dev/null
+          xcrun --sdk appletvsimulator --show-sdk-path >/dev/null
+          xcrun --sdk watchos --show-sdk-path >/dev/null
+          xcrun --sdk watchsimulator --show-sdk-path >/dev/null
+          xcrun --sdk xros --show-sdk-path >/dev/null
+          xcrun --sdk xrsimulator --show-sdk-path >/dev/null
+
+      - name: Fetch upstream tag refs
+        run: |
+          set -euo pipefail
+
+          python3 scripts/spm_release.py fetch-upstream-tags --remote upstream
+
+      - name: Resolve upstream tag for validation
+        id: release_tag
+        run: |
+          set -euo pipefail
+
+          requested_upstream_tag="${{ inputs.upstream_tag }}"
+          if [[ -n "${requested_upstream_tag}" ]]; then
+            upstream_tag="$(python3 scripts/spm_release.py assert-stable-tag --tag "${requested_upstream_tag}")"
+          else
+            upstream_tag="$(python3 scripts/spm_release.py latest-fetched-upstream-stable-tag)"
+          fi
+          package_tags_file="${RUNNER_TEMP}/existing-package-tags.txt"
+          git ls-remote --tags --refs origin "refs/tags/${upstream_tag}-alpha.*" \
+            | awk -F'/' 'NF { print $NF }' > "${package_tags_file}"
+
+          package_tag="$(
+            python3 scripts/spm_release.py next-package-release-tag \
+              --upstream-tag "${upstream_tag}" < "${package_tags_file}"
+          )"
+
+          echo "upstream_tag=${upstream_tag}" >> "${GITHUB_OUTPUT}"
+          echo "package_tag=${package_tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Export upstream source tree
+        id: source_tree
+        run: |
+          set -euo pipefail
+
+          source_dir="${RUNNER_TEMP}/libwebp-source"
+          python3 scripts/spm_release.py export-upstream-source \
+            --tag "${{ steps.release_tag.outputs.upstream_tag }}" \
+            --output-dir "${source_dir}"
+
+          echo "source_dir=${source_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run unit tests
+        run: |
+          set -euo pipefail
+
+          python3 -m unittest tests/test_spm_release.py
+
+      - name: Validate workflow YAML
+        run: |
+          set -euo pipefail
+
+          ruby -e 'require "yaml"; Dir[".github/workflows/*.yml"].sort.each { |path| YAML.load_file(path) }; puts "workflow-yaml-ok"'
+
+      - name: Build and validate Apple XCFramework artifacts
+        run: |
+          set -euo pipefail
+
+          artifacts_dir="${RUNNER_TEMP}/validation-artifacts"
+          rm -rf "${artifacts_dir}"
+          mkdir -p "${artifacts_dir}"
+
+          ./scripts/build_apple_xcframeworks.sh \
+            --source-dir "${{ steps.source_tree.outputs.source_dir }}" \
+            --output-dir "${artifacts_dir}" \
+            --tag "${{ steps.release_tag.outputs.package_tag }}"
+
+      - name: Validate rendered package contract
+        run: |
+          set -euo pipefail
+
+          artifacts_dir="${RUNNER_TEMP}/validation-artifacts"
+          metadata_dir="${RUNNER_TEMP}/validation-metadata"
+          validation_dir="${RUNNER_TEMP}/package-validation"
+
+          rm -rf "${metadata_dir}" "${validation_dir}"
+          mkdir -p "${metadata_dir}" "${validation_dir}"
+
+          python3 scripts/spm_release.py compute-checksums \
+            --archives-dir "${artifacts_dir}" \
+            --output "${metadata_dir}/checksums.json"
+
+          python3 scripts/spm_release.py render-package-swift \
+            --owner "${REPOSITORY_OWNER}" \
+            --repository "${REPOSITORY_NAME}" \
+            --tag "${{ steps.release_tag.outputs.package_tag }}" \
+            --checksums-json "${metadata_dir}/checksums.json" \
+            --output "${metadata_dir}/Package.swift"
+
+          cp "${metadata_dir}/Package.swift" "${validation_dir}/Package.swift"
+          swift package dump-package --package-path "${validation_dir}" >/dev/null
+
+      - name: Upload validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-xcframework-validation-${{ github.run_id }}
+          path: ${{ runner.temp }}/validation-artifacts
+          if-no-files-found: ignore

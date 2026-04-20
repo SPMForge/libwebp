@@ -1,0 +1,447 @@
+name: Publish Package Release Core
+
+on:
+  workflow_call:
+    inputs:
+      selection_mode:
+        required: true
+        type: string
+      upstream_tag:
+        required: false
+        type: string
+        default: ""
+      release_channel:
+        required: true
+        type: string
+      publish_to_main:
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Run shared publish pipeline
+    runs-on: macos-15
+    env:
+      REPOSITORY_OWNER: ${{ github.repository_owner }}
+      REPOSITORY_NAME: ${{ github.event.repository.name }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Verify build prerequisites
+        run: |
+          set -euo pipefail
+
+          command -v cmake >/dev/null 2>&1 || brew install cmake
+          command -v xcodebuild >/dev/null
+          command -v swift >/dev/null
+          command -v plutil >/dev/null
+          xcrun --find vtool >/dev/null
+          xcrun --sdk iphoneos --show-sdk-path >/dev/null
+          xcrun --sdk iphonesimulator --show-sdk-path >/dev/null
+          xcrun --sdk macosx --show-sdk-path >/dev/null
+          xcrun --sdk appletvos --show-sdk-path >/dev/null
+          xcrun --sdk appletvsimulator --show-sdk-path >/dev/null
+          xcrun --sdk watchos --show-sdk-path >/dev/null
+          xcrun --sdk watchsimulator --show-sdk-path >/dev/null
+          xcrun --sdk xros --show-sdk-path >/dev/null
+          xcrun --sdk xrsimulator --show-sdk-path >/dev/null
+
+      - name: Fetch upstream tag refs
+        run: |
+          set -euo pipefail
+
+          python3 scripts/spm_release.py fetch-upstream-tags --remote upstream
+
+      - name: Resolve release target
+        id: release_tag
+        run: |
+          set -euo pipefail
+
+          selection_mode="${{ inputs.selection_mode }}"
+          requested_upstream_tag="${{ inputs.upstream_tag }}"
+          release_channel="${{ inputs.release_channel }}"
+
+          case "${selection_mode}" in
+            latest)
+              if [[ -n "${requested_upstream_tag}" ]]; then
+                echo "selection_mode=latest does not accept an explicit upstream_tag input." >&2
+                exit 1
+              fi
+              if [[ "${release_channel}" != "alpha" ]]; then
+                echo "selection_mode=latest only supports alpha releases." >&2
+                exit 1
+              fi
+              upstream_tag="$(python3 scripts/spm_release.py latest-fetched-upstream-stable-tag)"
+              ;;
+            requested)
+              if [[ -z "${requested_upstream_tag}" ]]; then
+                echo "selection_mode=requested requires an upstream_tag input." >&2
+                exit 1
+              fi
+              upstream_tag="$(python3 scripts/spm_release.py assert-stable-tag --tag "${requested_upstream_tag}")"
+              ;;
+            *)
+              echo "Unsupported selection_mode: ${selection_mode}" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ "${release_channel}" != "alpha" && "${release_channel}" != "stable" ]]; then
+            echo "Unsupported release_channel: ${release_channel}" >&2
+            exit 1
+          fi
+
+          if [[ "${release_channel}" == "stable" && "${selection_mode}" != "requested" ]]; then
+            echo "Stable releases require selection_mode=requested." >&2
+            exit 1
+          fi
+
+          upstream_commit="$(git rev-parse "refs/upstream-tags/${upstream_tag}^{commit}")"
+          git rev-parse --verify --quiet "refs/upstream-tags/${upstream_tag}^{commit}" >/dev/null
+
+          latest_package_tag=
+          next_package_tag=
+          build_tag=
+          remote_tag_exists=false
+          remote_tag_commit=
+
+          if [[ "${release_channel}" == "alpha" ]]; then
+            package_tags_file="${RUNNER_TEMP}/existing-package-tags.txt"
+            git ls-remote --tags --refs origin "refs/tags/${upstream_tag}-alpha.*" \
+              | awk -F'/' 'NF { print $NF }' > "${package_tags_file}"
+
+            latest_package_tag="$(
+              python3 scripts/spm_release.py latest-package-release-tag \
+                --upstream-tag "${upstream_tag}" < "${package_tags_file}" || true
+            )"
+            next_package_tag="$(
+              python3 scripts/spm_release.py next-package-release-tag \
+                --upstream-tag "${upstream_tag}" < "${package_tags_file}"
+            )"
+            build_tag="${latest_package_tag:-${next_package_tag}}"
+
+            if [[ -n "${latest_package_tag}" ]]; then
+              git fetch --force origin "refs/tags/${latest_package_tag}:refs/tags/${latest_package_tag}"
+              remote_tag_exists=true
+              remote_tag_commit="$(git rev-parse "refs/tags/${latest_package_tag}^{commit}")"
+            fi
+          else
+            build_tag="${upstream_tag}"
+
+            if git ls-remote --exit-code --tags --refs origin "refs/tags/${upstream_tag}" >/dev/null 2>&1; then
+              git fetch --force origin "refs/tags/${upstream_tag}:refs/tags/${upstream_tag}"
+              remote_tag_exists=true
+              remote_tag_commit="$(git rev-parse "refs/tags/${upstream_tag}^{commit}")"
+            fi
+          fi
+
+          echo "selection_mode=${selection_mode}" >> "${GITHUB_OUTPUT}"
+          echo "release_channel=${release_channel}" >> "${GITHUB_OUTPUT}"
+          echo "upstream_tag=${upstream_tag}" >> "${GITHUB_OUTPUT}"
+          echo "upstream_commit=${upstream_commit}" >> "${GITHUB_OUTPUT}"
+          echo "latest_package_tag=${latest_package_tag}" >> "${GITHUB_OUTPUT}"
+          echo "next_package_tag=${next_package_tag}" >> "${GITHUB_OUTPUT}"
+          echo "build_tag=${build_tag}" >> "${GITHUB_OUTPUT}"
+          echo "remote_tag_exists=${remote_tag_exists}" >> "${GITHUB_OUTPUT}"
+          echo "remote_tag_commit=${remote_tag_commit}" >> "${GITHUB_OUTPUT}"
+
+      - name: Export upstream source tree
+        id: source_tree
+        run: |
+          set -euo pipefail
+
+          source_dir="${RUNNER_TEMP}/libwebp-source"
+          python3 scripts/spm_release.py export-upstream-source \
+            --tag "${{ steps.release_tag.outputs.upstream_tag }}" \
+            --output-dir "${source_dir}"
+
+          echo "source_dir=${source_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build release artifacts
+        id: build
+        run: |
+          set -euo pipefail
+
+          artifacts_dir="${RUNNER_TEMP}/release-artifacts"
+          metadata_dir="${RUNNER_TEMP}/release-metadata"
+          validation_dir="${RUNNER_TEMP}/package-validation"
+
+          rm -rf "${artifacts_dir}" "${metadata_dir}" "${validation_dir}"
+          mkdir -p "${artifacts_dir}" "${metadata_dir}" "${validation_dir}"
+
+          ./scripts/build_apple_xcframeworks.sh \
+            --source-dir "${{ steps.source_tree.outputs.source_dir }}" \
+            --output-dir "${artifacts_dir}" \
+            --tag "${{ steps.release_tag.outputs.build_tag }}"
+
+          python3 scripts/spm_release.py compute-checksums \
+            --archives-dir "${artifacts_dir}" \
+            --output "${metadata_dir}/checksums.json"
+
+          echo "artifacts_dir=${artifacts_dir}" >> "${GITHUB_OUTPUT}"
+          echo "metadata_dir=${metadata_dir}" >> "${GITHUB_OUTPUT}"
+          echo "validation_dir=${validation_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Select package publication tag
+        id: publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          selection_mode="${{ steps.release_tag.outputs.selection_mode }}"
+          release_channel="${{ steps.release_tag.outputs.release_channel }}"
+          upstream_tag="${{ steps.release_tag.outputs.upstream_tag }}"
+          build_tag="${{ steps.release_tag.outputs.build_tag }}"
+          latest_package_tag="${{ steps.release_tag.outputs.latest_package_tag }}"
+          next_package_tag="${{ steps.release_tag.outputs.next_package_tag }}"
+          artifacts_dir="${{ steps.build.outputs.artifacts_dir }}"
+          metadata_dir="${{ steps.build.outputs.metadata_dir }}"
+          validation_dir="${{ steps.build.outputs.validation_dir }}"
+          existing_package_file="${RUNNER_TEMP}/existing-package.swift"
+          release_assets_file="${RUNNER_TEMP}/release-assets.txt"
+
+          render_package() {
+            local package_tag="$1"
+            python3 scripts/spm_release.py render-package-swift \
+              --owner "${REPOSITORY_OWNER}" \
+              --repository "${REPOSITORY_NAME}" \
+              --tag "${package_tag}" \
+              --checksums-json "${metadata_dir}/checksums.json" \
+              --output "${metadata_dir}/Package.swift"
+            cp "${metadata_dir}/Package.swift" "${validation_dir}/Package.swift"
+            swift package dump-package --package-path "${validation_dir}" >/dev/null
+          }
+
+          final_package_tag="${build_tag}"
+          mode="fresh"
+          release_exists=false
+          remote_tag_exists=false
+          remote_tag_commit=
+          missing_assets=
+
+          if [[ "${release_channel}" == "stable" ]]; then
+            final_package_tag="${upstream_tag}"
+            remote_tag_exists="${{ steps.release_tag.outputs.remote_tag_exists }}"
+            remote_tag_commit="${{ steps.release_tag.outputs.remote_tag_commit }}"
+
+            render_package "${final_package_tag}"
+
+            if [[ "${remote_tag_exists}" == "true" ]]; then
+              if ! git show "refs/tags/${final_package_tag}:Package.swift" > "${existing_package_file}" 2>/dev/null; then
+                echo "Stable package tag ${final_package_tag} already exists without Package.swift; refusing to overwrite it." >&2
+                exit 1
+              fi
+              if ! cmp -s "${existing_package_file}" "${metadata_dir}/Package.swift"; then
+                echo "Stable package tag ${final_package_tag} already exists with a different Package.swift; refusing to overwrite published stable artifacts." >&2
+                exit 1
+              fi
+
+              : > "${release_assets_file}"
+              if gh release view "${final_package_tag}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --json assets \
+                --jq '.assets[].name' > "${release_assets_file}" 2>/dev/null; then
+                release_exists=true
+              fi
+
+              plan_args=(release-publish-plan --tag "${final_package_tag}" --tag-exists)
+              while IFS= read -r asset_name; do
+                [[ -n "${asset_name}" ]] || continue
+                plan_args+=(--asset "${asset_name}")
+              done < "${release_assets_file}"
+
+              plan_json="$(python3 scripts/spm_release.py "${plan_args[@]}")"
+              mode="$(printf '%s' "${plan_json}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')"
+              missing_assets="$(
+                printf '%s' "${plan_json}" \
+                  | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["missing_assets"]))'
+              )"
+            else
+              plan_json="$(python3 scripts/spm_release.py release-publish-plan --tag "${final_package_tag}")"
+              mode="$(printf '%s' "${plan_json}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')"
+              missing_assets="$(
+                printf '%s' "${plan_json}" \
+                  | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["missing_assets"]))'
+              )"
+            fi
+          else
+            render_package "${build_tag}"
+
+            if [[ -n "${latest_package_tag}" ]]; then
+              if git show "refs/tags/${latest_package_tag}:Package.swift" > "${existing_package_file}" 2>/dev/null \
+                && cmp -s "${existing_package_file}" "${metadata_dir}/Package.swift"; then
+                final_package_tag="${latest_package_tag}"
+                remote_tag_exists=true
+                remote_tag_commit="${{ steps.release_tag.outputs.remote_tag_commit }}"
+                : > "${release_assets_file}"
+
+                if gh release view "${final_package_tag}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --json assets \
+                  --jq '.assets[].name' > "${release_assets_file}" 2>/dev/null; then
+                  release_exists=true
+                fi
+
+                plan_args=(release-publish-plan --tag "${final_package_tag}" --tag-exists)
+                while IFS= read -r asset_name; do
+                  [[ -n "${asset_name}" ]] || continue
+                  plan_args+=(--asset "${asset_name}")
+                done < "${release_assets_file}"
+
+                plan_json="$(python3 scripts/spm_release.py "${plan_args[@]}")"
+                mode="$(printf '%s' "${plan_json}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')"
+                missing_assets="$(
+                  printf '%s' "${plan_json}" \
+                    | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["missing_assets"]))'
+                )"
+              else
+                final_package_tag="${next_package_tag}"
+              fi
+            fi
+
+            if [[ "${final_package_tag}" != "${build_tag}" ]]; then
+              python3 scripts/spm_release.py retag-archives \
+                --archives-dir "${artifacts_dir}" \
+                --source-tag "${build_tag}" \
+                --destination-tag "${final_package_tag}" >/dev/null
+              render_package "${final_package_tag}"
+            fi
+
+            if [[ "${remote_tag_exists}" != "true" ]]; then
+              plan_json="$(python3 scripts/spm_release.py release-publish-plan --tag "${final_package_tag}")"
+              mode="$(printf '%s' "${plan_json}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')"
+              missing_assets="$(
+                printf '%s' "${plan_json}" \
+                  | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["missing_assets"]))'
+              )"
+            fi
+          fi
+
+          if [[ "${selection_mode}" == "latest" ]]; then
+            summary_line="Automated ${release_channel} mergeable binary release ${final_package_tag} for upstream libwebp ${upstream_tag}."
+          else
+            summary_line="Manual ${release_channel} mergeable binary release ${final_package_tag} for upstream libwebp ${upstream_tag}."
+          fi
+
+          cat > "${metadata_dir}/release-notes.md" <<EOF
+          ${summary_line}
+
+          Upstream source commit: ${{ steps.release_tag.outputs.upstream_commit }}
+
+          Published artifacts:
+          - Mergeable WebP.xcframework.zip
+          - Mergeable WebPDecoder.xcframework.zip
+          - Mergeable WebPDemux.xcframework.zip
+          - Mergeable WebPMux.xcframework.zip
+          - Mergeable SharpYuv.xcframework.zip
+          - checksums.json
+          EOF
+
+          echo "package_tag=${final_package_tag}" >> "${GITHUB_OUTPUT}"
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+          echo "release_exists=${release_exists}" >> "${GITHUB_OUTPUT}"
+          echo "remote_tag_exists=${remote_tag_exists}" >> "${GITHUB_OUTPUT}"
+          echo "remote_tag_commit=${remote_tag_commit}" >> "${GITHUB_OUTPUT}"
+          echo "missing_assets=${missing_assets}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create package commit and push release tag
+        if: steps.publication.outputs.mode == 'fresh'
+        id: git_release
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          release_branch="release/${{ steps.publication.outputs.package_tag }}"
+          git switch --create "${release_branch}"
+
+          cp "${{ steps.build.outputs.metadata_dir }}/Package.swift" Package.swift
+          git add Package.swift
+
+          if git diff --cached --quiet -- Package.swift; then
+            commit_sha="$(git rev-parse HEAD)"
+          else
+            git commit -m "Release ${{ steps.publication.outputs.package_tag }}"
+            commit_sha="$(git rev-parse HEAD)"
+          fi
+
+          git tag "${{ steps.publication.outputs.package_tag }}" "${commit_sha}"
+          git push origin "refs/tags/${{ steps.publication.outputs.package_tag }}"
+
+          echo "commit_sha=${commit_sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Create GitHub release
+        if: steps.publication.outputs.mode == 'fresh'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          gh release create "${{ steps.publication.outputs.package_tag }}" \
+            "${{ steps.build.outputs.artifacts_dir }}"/*.zip \
+            "${{ steps.build.outputs.metadata_dir }}/checksums.json" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${{ steps.git_release.outputs.commit_sha }}" \
+            --title "${{ steps.publication.outputs.package_tag }}" \
+            --notes-file "${{ steps.build.outputs.metadata_dir }}/release-notes.md"
+
+      - name: Repair GitHub release
+        if: steps.publication.outputs.mode == 'repair'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ steps.publication.outputs.release_exists }}" == "true" ]]; then
+            gh release upload "${{ steps.publication.outputs.package_tag }}" \
+              "${{ steps.build.outputs.artifacts_dir }}"/*.zip \
+              "${{ steps.build.outputs.metadata_dir }}/checksums.json" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
+            gh release edit "${{ steps.publication.outputs.package_tag }}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${{ steps.publication.outputs.package_tag }}" \
+              --notes-file "${{ steps.build.outputs.metadata_dir }}/release-notes.md"
+          else
+            gh release create "${{ steps.publication.outputs.package_tag }}" \
+              "${{ steps.build.outputs.artifacts_dir }}"/*.zip \
+              "${{ steps.build.outputs.metadata_dir }}/checksums.json" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --target "${{ steps.publication.outputs.remote_tag_commit }}" \
+              --title "${{ steps.publication.outputs.package_tag }}" \
+              --notes-file "${{ steps.build.outputs.metadata_dir }}/release-notes.md"
+          fi
+
+      - name: Select release commit
+        if: ${{ inputs.publish_to_main && steps.publication.outputs.mode != 'skip' }}
+        id: release_commit
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ steps.publication.outputs.mode }}" == "fresh" ]]; then
+            echo "commit_sha=${{ steps.git_release.outputs.commit_sha }}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "commit_sha=${{ steps.publication.outputs.remote_tag_commit }}" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Optionally update default branch
+        if: ${{ inputs.publish_to_main && steps.publication.outputs.mode != 'skip' }}
+        run: |
+          set -euo pipefail
+
+          git push origin "${{ steps.release_commit.outputs.commit_sha }}:refs/heads/${DEFAULT_BRANCH}"
