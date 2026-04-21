@@ -44,6 +44,12 @@ class SourceAcquisitionConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class CompilerWrapperPaths:
+    cc: Path
+    cxx: Path
+
+
+@dataclasses.dataclass(frozen=True)
 class ArtifactDefinition:
     target_name: str
     cmake_target: str
@@ -1021,7 +1027,38 @@ def copy_source_tree(source_dir: Path, destination_dir: Path) -> Path:
     return working_source
 
 
-def cmake_configuration_args_for_platform_group(platform_group: PlatformGroup) -> tuple[str, ...]:
+def write_ccache_compiler_wrapper(path: Path, compiler_name: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "#!/bin/sh\n"
+        f'exec ccache "$(xcrun --find {compiler_name})" "$@"\n',
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
+def create_xcode_ccache_wrappers(directory: Path) -> CompilerWrapperPaths:
+    return CompilerWrapperPaths(
+        cc=write_ccache_compiler_wrapper(directory / "ccache-clang", "clang"),
+        cxx=write_ccache_compiler_wrapper(directory / "ccache-clang++", "clang++"),
+    )
+
+
+def should_use_ccache() -> bool:
+    return os.environ.get("SPM_RELEASE_ENABLE_CCACHE", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def cmake_configuration_args_for_platform_group(
+    platform_group: PlatformGroup,
+    *,
+    compiler_wrappers: CompilerWrapperPaths | None = None,
+) -> tuple[str, ...]:
     # The Xcode generator needs the target architectures at configure time.
     # Passing only ARCHS during archive can produce object library references
     # that point at the wrong architecture directory in universal builds.
@@ -1035,6 +1072,13 @@ def cmake_configuration_args_for_platform_group(platform_group: PlatformGroup) -
     ]
     if platform_group.cmake_system_name is not None:
         arguments.append(f"-DCMAKE_SYSTEM_NAME={platform_group.cmake_system_name}")
+    if compiler_wrappers is not None:
+        arguments.extend(
+            [
+                f"-DCMAKE_XCODE_ATTRIBUTE_CC={compiler_wrappers.cc}",
+                f"-DCMAKE_XCODE_ATTRIBUTE_CXX={compiler_wrappers.cxx}",
+            ]
+        )
     return tuple(arguments)
 
 
@@ -1045,6 +1089,13 @@ def configure_cmake_project(
     platform_group: PlatformGroup,
 ) -> Path:
     build_dir.mkdir(parents=True, exist_ok=True)
+    compiler_wrappers = None
+    if should_use_ccache():
+        if shutil.which("ccache") is None:
+            raise RuntimeError(
+                "SPM_RELEASE_ENABLE_CCACHE is set but ccache is not available in PATH."
+            )
+        compiler_wrappers = create_xcode_ccache_wrappers(build_dir / "compiler-wrappers")
     run_command(
         [
             "cmake",
@@ -1054,7 +1105,10 @@ def configure_cmake_project(
             str(build_dir),
             "-G",
             "Xcode",
-            *cmake_configuration_args_for_platform_group(platform_group),
+            *cmake_configuration_args_for_platform_group(
+                platform_group,
+                compiler_wrappers=compiler_wrappers,
+            ),
         ]
     )
 

@@ -29,6 +29,12 @@ jobs:
       REPOSITORY_OWNER: ${{ github.repository_owner }}
       REPOSITORY_NAME: ${{ github.event.repository.name }}
       DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      SPM_RELEASE_ENABLE_CCACHE: "1"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_BASEDIR: ${{ runner.temp }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_MAXSIZE: 750M
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -45,6 +51,7 @@ jobs:
           set -euo pipefail
 
           command -v cmake >/dev/null 2>&1 || brew install cmake
+          command -v ccache >/dev/null 2>&1 || brew install ccache
           command -v xcodebuild >/dev/null
           command -v swift >/dev/null
           command -v plutil >/dev/null
@@ -58,6 +65,16 @@ jobs:
           xcrun --sdk watchsimulator --show-sdk-path >/dev/null
           xcrun --sdk xros --show-sdk-path >/dev/null
           xcrun --sdk xrsimulator --show-sdk-path >/dev/null
+
+      - name: Capture build cache inputs
+        id: cache_inputs
+        run: |
+          set -euo pipefail
+
+          mkdir -p "${CCACHE_DIR}"
+          ccache --set-config=max_size="${CCACHE_MAXSIZE}"
+          xcode_version_hash="$(xcodebuild -version | shasum -a 256 | cut -c1-16)"
+          echo "xcode_version_hash=${xcode_version_hash}" >> "${GITHUB_OUTPUT}"
 
       - name: Fetch upstream tag refs
         run: |
@@ -170,6 +187,21 @@ jobs:
 
           echo "source_dir=${source_dir}" >> "${GITHUB_OUTPUT}"
 
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: libwebp-ccache-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_tag }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json') }}
+          restore-keys: |
+            libwebp-ccache-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_tag }}-
+            libwebp-ccache-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-
+
+      - name: Reset ccache statistics
+        run: |
+          set -euo pipefail
+
+          ccache --zero-stats
+
       - name: Build release artifacts
         id: build
         run: |
@@ -178,14 +210,16 @@ jobs:
           artifacts_dir="${RUNNER_TEMP}/release-artifacts"
           metadata_dir="${RUNNER_TEMP}/release-metadata"
           validation_dir="${RUNNER_TEMP}/package-validation"
+          working_dir="${RUNNER_TEMP}/xcframework-build"
 
-          rm -rf "${artifacts_dir}" "${metadata_dir}" "${validation_dir}"
+          rm -rf "${artifacts_dir}" "${metadata_dir}" "${validation_dir}" "${working_dir}"
           mkdir -p "${artifacts_dir}" "${metadata_dir}" "${validation_dir}"
 
           ./scripts/build_apple_xcframeworks.sh \
             --source-dir "${{ steps.source_tree.outputs.source_dir }}" \
             --output-dir "${artifacts_dir}" \
-            --tag "${{ steps.release_tag.outputs.build_tag }}"
+            --tag "${{ steps.release_tag.outputs.build_tag }}" \
+            --working-dir "${RUNNER_TEMP}/xcframework-build"
 
           python3 scripts/spm_release.py compute-checksums \
             --archives-dir "${artifacts_dir}" \
@@ -194,6 +228,13 @@ jobs:
           echo "artifacts_dir=${artifacts_dir}" >> "${GITHUB_OUTPUT}"
           echo "metadata_dir=${metadata_dir}" >> "${GITHUB_OUTPUT}"
           echo "validation_dir=${validation_dir}" >> "${GITHUB_OUTPUT}"
+
+      - name: Show ccache statistics
+        if: always()
+        run: |
+          set -euo pipefail
+
+          ccache --show-stats
 
       - name: Select package publication tag
         id: publication

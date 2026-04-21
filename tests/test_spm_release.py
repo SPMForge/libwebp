@@ -671,6 +671,39 @@ class CMakeConfigurationTests(unittest.TestCase):
         self.assertNotIn("-DCMAKE_SYSTEM_NAME=iOS", arguments)
         self.assertEqual(mac_catalyst.destination, "generic/platform=macOS,variant=Mac Catalyst")
 
+    def test_xcode_ccache_wrapper_scripts_are_executable_and_dispatch_through_xcrun(self):
+        module = load_spm_release_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            wrappers = module.create_xcode_ccache_wrappers(Path(temp_dir))
+
+            self.assertTrue(wrappers.cc.exists())
+            self.assertTrue(wrappers.cxx.exists())
+            self.assertTrue(wrappers.cc.stat().st_mode & 0o111)
+            self.assertTrue(wrappers.cxx.stat().st_mode & 0o111)
+            self.assertIn('exec ccache "$(xcrun --find clang)" "$@"', wrappers.cc.read_text(encoding="utf-8"))
+            self.assertIn(
+                'exec ccache "$(xcrun --find clang++)" "$@"',
+                wrappers.cxx.read_text(encoding="utf-8"),
+            )
+
+    def test_cmake_configuration_args_can_pin_xcode_compiler_wrapper_paths(self):
+        module = load_spm_release_module()
+
+        ios_device = next(group for group in module.PLATFORM_GROUPS if group.identifier == "ios")
+        compiler_wrappers = module.CompilerWrapperPaths(
+            cc=Path("/tmp/ccache-clang"),
+            cxx=Path("/tmp/ccache-clang++"),
+        )
+
+        arguments = module.cmake_configuration_args_for_platform_group(
+            ios_device,
+            compiler_wrappers=compiler_wrappers,
+        )
+
+        self.assertIn("-DCMAKE_XCODE_ATTRIBUTE_CC=/tmp/ccache-clang", arguments)
+        self.assertIn("-DCMAKE_XCODE_ATTRIBUTE_CXX=/tmp/ccache-clang++", arguments)
+
 
 class BuildArchiveTests(unittest.TestCase):
     def test_assert_destination_available_accepts_matching_available_destination(self):
@@ -784,6 +817,11 @@ class WorkflowTopologyTests(unittest.TestCase):
         self.assertIn("publish_to_main:", workflow_body)
         self.assertIn("python3 scripts/spm_release.py fetch-upstream-tags --remote upstream", workflow_body)
         self.assertIn("python3 scripts/spm_release.py export-upstream-source", workflow_body)
+        self.assertIn('SPM_RELEASE_ENABLE_CCACHE: "1"', workflow_body)
+        self.assertIn("uses: actions/cache@v4", workflow_body)
+        self.assertIn("path: ${{ github.workspace }}/.ccache", workflow_body)
+        self.assertIn("ccache --show-stats", workflow_body)
+        self.assertIn('--working-dir "${RUNNER_TEMP}/xcframework-build"', workflow_body)
         self.assertNotIn("https://github.com/webmproject/libwebp.git", workflow_body)
 
     def test_validate_workflow_checks_rendered_package_contract(self):
@@ -816,6 +854,11 @@ class WorkflowTopologyTests(unittest.TestCase):
         )
         self.assertIn("python3 scripts/spm_release.py fetch-upstream-tags --remote upstream", workflow_body)
         self.assertIn("python3 scripts/spm_release.py export-upstream-source", workflow_body)
+        self.assertIn('SPM_RELEASE_ENABLE_CCACHE: "1"', workflow_body)
+        self.assertIn("uses: actions/cache@v4", workflow_body)
+        self.assertIn("path: ${{ github.workspace }}/.ccache", workflow_body)
+        self.assertIn("ccache --show-stats", workflow_body)
+        self.assertIn('--working-dir "${RUNNER_TEMP}/xcframework-build"', workflow_body)
         self.assertNotIn("https://github.com/webmproject/libwebp.git", workflow_body)
 
 if __name__ == "__main__":
