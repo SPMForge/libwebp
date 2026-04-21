@@ -32,7 +32,6 @@ jobs:
       SPM_RELEASE_ENABLE_CCACHE: "1"
       CCACHE_KEY_SCHEMA: v2
       CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_BASEDIR: ${{ runner.temp }}
       CCACHE_COMPILERCHECK: content
       CCACHE_NOHASHDIR: "true"
       CCACHE_MAXSIZE: 750M
@@ -73,6 +72,7 @@ jobs:
           set -euo pipefail
 
           mkdir -p "${CCACHE_DIR}"
+          echo "CCACHE_BASEDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
           ccache --set-config=max_size="${CCACHE_MAXSIZE}"
           xcode_version_hash="$(xcodebuild -version | shasum -a 256 | cut -c1-16)"
           echo "xcode_version_hash=${xcode_version_hash}" >> "${GITHUB_OUTPUT}"
