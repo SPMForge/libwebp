@@ -55,7 +55,7 @@ class ArtifactDefinition:
     cmake_target: str
     library_name: str
     public_headers: tuple[str, ...]
-    consumer_dependencies: tuple[str, ...]
+    linked_binary_dependencies: tuple[str, ...]
     consumer_source: str
 
     def archive_name_for_tag(self, tag: str) -> str:
@@ -150,7 +150,7 @@ ARTIFACT_DEFINITIONS: tuple[ArtifactDefinition, ...] = (
             "src/webp/encode.h",
             "src/webp/types.h",
         ),
-        consumer_dependencies=("WebP",),
+        linked_binary_dependencies=("SharpYuv",),
         consumer_source=textwrap.dedent(
             """\
             #include "webp/decode.h"
@@ -170,7 +170,7 @@ ARTIFACT_DEFINITIONS: tuple[ArtifactDefinition, ...] = (
             "src/webp/decode.h",
             "src/webp/types.h",
         ),
-        consumer_dependencies=("WebPDecoder",),
+        linked_binary_dependencies=(),
         consumer_source=textwrap.dedent(
             """\
             #include "webp/decode.h"
@@ -191,7 +191,7 @@ ARTIFACT_DEFINITIONS: tuple[ArtifactDefinition, ...] = (
             "src/webp/mux_types.h",
             "src/webp/demux.h",
         ),
-        consumer_dependencies=("WebPDemux", "WebP"),
+        linked_binary_dependencies=("WebP", "SharpYuv"),
         consumer_source=textwrap.dedent(
             """\
             #include <stdint.h>
@@ -213,7 +213,7 @@ ARTIFACT_DEFINITIONS: tuple[ArtifactDefinition, ...] = (
             "src/webp/mux.h",
             "src/webp/mux_types.h",
         ),
-        consumer_dependencies=("WebPMux", "WebP"),
+        linked_binary_dependencies=("WebP", "SharpYuv"),
         consumer_source=textwrap.dedent(
             """\
             #include "webp/mux.h"
@@ -235,7 +235,7 @@ ARTIFACT_DEFINITIONS: tuple[ArtifactDefinition, ...] = (
             "sharpyuv/sharpyuv.h",
             "sharpyuv/sharpyuv_csp.h",
         ),
-        consumer_dependencies=("SharpYuv",),
+        linked_binary_dependencies=(),
         consumer_source=textwrap.dedent(
             """\
             #include "sharpyuv/sharpyuv.h"
@@ -588,7 +588,7 @@ def render_package_swift(
         "        .library("
         + f'name: "{definition.target_name}", '
         + "targets: ["
-        + ", ".join(f'"{dependency_name}"' for dependency_name in definition.consumer_dependencies)
+        + ", ".join(f'"{target_name}"' for target_name in swiftpm_product_targets(definition))
         + "]"
         + ")"
         for definition in ARTIFACT_DEFINITIONS
@@ -660,7 +660,7 @@ def render_local_binary_package_swift(
         "        .library("
         + f'name: "{definition.target_name}", '
         + "targets: ["
-        + ", ".join(f'"{dependency_name}"' for dependency_name in definition.consumer_dependencies)
+        + ", ".join(f'"{target_name}"' for target_name in swiftpm_product_targets(definition))
         + "]"
         + ")"
         for definition in ARTIFACT_DEFINITIONS
@@ -962,6 +962,22 @@ def artifact_definition_by_name(target_name: str) -> ArtifactDefinition:
         if definition.target_name == target_name:
             return definition
     raise RuntimeError(f"Unknown artifact target: {target_name}")
+
+
+def swiftpm_product_targets(definition: ArtifactDefinition) -> tuple[str, ...]:
+    ordered_targets: list[str] = []
+    seen_targets: set[str] = set()
+
+    def visit(target_name: str) -> None:
+        if target_name in seen_targets:
+            return
+        seen_targets.add(target_name)
+        ordered_targets.append(target_name)
+        for dependency_name in artifact_definition_by_name(target_name).linked_binary_dependencies:
+            visit(dependency_name)
+
+    visit(definition.target_name)
+    return tuple(ordered_targets)
 
 
 def ensure_command_exists(command: str) -> None:
@@ -1390,7 +1406,7 @@ def assemble_framework_bundle(
     shutil.copy2(built_slice.binary_path, binary_path)
     run_command(["install_name_tool", "-id", framework_install_name(definition.target_name), str(binary_path)])
 
-    for dependency_name in definition.consumer_dependencies[1:]:
+    for dependency_name in definition.linked_binary_dependencies:
         dependency = artifact_definition_by_name(dependency_name)
         current_install_name = linked_install_name(binary_path, dependency.library_name)
         run_command(
@@ -1538,7 +1554,7 @@ def write_cmake_consumer_fixture(consumer_root: Path, xcframeworks: dict[str, Pa
         )
         header_dir = library_root / "Headers"
         frameworks = []
-        for dependency_name in definition.consumer_dependencies:
+        for dependency_name in swiftpm_product_targets(definition):
             dependency = artifact_definition_by_name(dependency_name)
             frameworks.append(
                 cmake_quote(
@@ -1636,11 +1652,13 @@ def verify_cmake_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path)
             raise RuntimeError(f"Missing Release consumer binary: {release_binary}")
 
         debug_otool = command_output(["otool", "-L", str(debug_binary)])
-        if framework_install_name(definition.target_name) not in debug_otool:
-            raise RuntimeError(
-                "Debug consumer binary for "
-                + f"{definition.target_name} is not linked against {framework_install_name(definition.target_name)}"
-            )
+        for dependency_name in swiftpm_product_targets(definition):
+            expected_install_name = framework_install_name(dependency_name)
+            if expected_install_name not in debug_otool:
+                raise RuntimeError(
+                    "Debug consumer binary for "
+                    + f"{definition.target_name} is not linked against {expected_install_name}"
+                )
 
 
 def write_spm_binary_package_fixture(binary_package_root: Path, xcframeworks: dict[str, Path]) -> Path:

@@ -195,6 +195,30 @@ class ReleaseArtifactTests(unittest.TestCase):
             self.assertFalse((archives_dir / "WebP-v1.6.0-alpha.1.xcframework.zip").exists())
             self.assertTrue((archives_dir / "WebP-v1.6.0-alpha.2.xcframework.zip").exists())
 
+    def test_artifact_definitions_capture_direct_linked_binary_dependencies(self):
+        module = load_spm_release_module()
+
+        self.assertEqual(
+            module.artifact_definition_by_name("WebP").linked_binary_dependencies,
+            ("SharpYuv",),
+        )
+        self.assertEqual(
+            module.artifact_definition_by_name("WebPDecoder").linked_binary_dependencies,
+            (),
+        )
+        self.assertEqual(
+            module.artifact_definition_by_name("WebPDemux").linked_binary_dependencies,
+            ("WebP", "SharpYuv"),
+        )
+        self.assertEqual(
+            module.artifact_definition_by_name("WebPMux").linked_binary_dependencies,
+            ("WebP", "SharpYuv"),
+        )
+        self.assertEqual(
+            module.artifact_definition_by_name("SharpYuv").linked_binary_dependencies,
+            (),
+        )
+
     def test_render_package_swift_uses_release_asset_download_urls(self):
         module = load_spm_release_module()
 
@@ -211,9 +235,15 @@ class ReleaseArtifactTests(unittest.TestCase):
             },
         )
 
-        self.assertIn('.library(name: "WebP", targets: ["WebP"])', package_swift)
-        self.assertIn('.library(name: "WebPDemux", targets: ["WebPDemux", "WebP"])', package_swift)
-        self.assertIn('.library(name: "WebPMux", targets: ["WebPMux", "WebP"])', package_swift)
+        self.assertIn('.library(name: "WebP", targets: ["WebP", "SharpYuv"])', package_swift)
+        self.assertIn(
+            '.library(name: "WebPDemux", targets: ["WebPDemux", "WebP", "SharpYuv"])',
+            package_swift,
+        )
+        self.assertIn(
+            '.library(name: "WebPMux", targets: ["WebPMux", "WebP", "SharpYuv"])',
+            package_swift,
+        )
         self.assertIn('name: "libwebp"', package_swift)
         self.assertIn(
             'url: "https://github.com/RbBtSn0w/spm-libwebp/releases/download/v1.6.0-alpha.1/WebP-v1.6.0-alpha.1.xcframework.zip"',
@@ -513,6 +543,74 @@ class HeaderLayoutTests(unittest.TestCase):
 
         self.assertEqual(rewritten, '#include "./sharpyuv.h"\n')
 
+    def test_assemble_framework_bundle_rewrites_all_direct_linked_binary_dependencies(self):
+        module = load_spm_release_module()
+        definition = module.artifact_definition_by_name("WebPDemux")
+        platform_group = next(group for group in module.PLATFORM_GROUPS if group.identifier == "macos")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            headers_root = temp_path / "headers"
+            headers_root.mkdir()
+            (headers_root / "placeholder.h").write_text("// header\n", encoding="utf-8")
+            built_binary = temp_path / "libwebpdemux.dylib"
+            built_binary.write_text("binary\n", encoding="utf-8")
+            built_slice = module.BuiltSlice(
+                platform_group=platform_group,
+                archive_path=temp_path / "archive.xcarchive",
+                binary_path=built_binary,
+            )
+
+            with (
+                mock.patch.object(module, "run_command") as run_command,
+                mock.patch.object(
+                    module,
+                    "linked_install_name",
+                    side_effect=[
+                        "@rpath/libwebp.7.dylib",
+                        "@rpath/libsharpyuv.0.dylib",
+                    ],
+                ),
+            ):
+                module.assemble_framework_bundle(
+                    temp_path / "frameworks",
+                    definition=definition,
+                    built_slice=built_slice,
+                    headers_root=headers_root,
+                )
+
+        self.assertEqual(
+            run_command.call_args_list,
+            [
+                mock.call(
+                    [
+                        "install_name_tool",
+                        "-id",
+                        "@rpath/WebPDemux.framework/WebPDemux",
+                        mock.ANY,
+                    ]
+                ),
+                mock.call(
+                    [
+                        "install_name_tool",
+                        "-change",
+                        "@rpath/libwebp.7.dylib",
+                        "@rpath/WebP.framework/WebP",
+                        mock.ANY,
+                    ]
+                ),
+                mock.call(
+                    [
+                        "install_name_tool",
+                        "-change",
+                        "@rpath/libsharpyuv.0.dylib",
+                        "@rpath/SharpYuv.framework/SharpYuv",
+                        mock.ANY,
+                    ]
+                ),
+            ],
+        )
+
 
 class SwiftPMFixtureTests(unittest.TestCase):
     def test_render_local_binary_package_swift_uses_path_based_binary_targets(self):
@@ -527,8 +625,15 @@ class SwiftPMFixtureTests(unittest.TestCase):
         )
 
         self.assertIn('name: "LocalLibWebPBinary"', package_swift)
-        self.assertIn('.library(name: "WebPDemux", targets: ["WebPDemux", "WebP"])', package_swift)
-        self.assertIn('.library(name: "WebPMux", targets: ["WebPMux", "WebP"])', package_swift)
+        self.assertIn('.library(name: "WebP", targets: ["WebP", "SharpYuv"])', package_swift)
+        self.assertIn(
+            '.library(name: "WebPDemux", targets: ["WebPDemux", "WebP", "SharpYuv"])',
+            package_swift,
+        )
+        self.assertIn(
+            '.library(name: "WebPMux", targets: ["WebPMux", "WebP", "SharpYuv"])',
+            package_swift,
+        )
         self.assertIn('path: "Artifacts/WebP.xcframework"', package_swift)
         self.assertNotIn('url: "https://github.com/', package_swift)
 

@@ -11,10 +11,10 @@ let package = Package(
         .visionOS(.v1)
     ],
     products: [
-        .library(name: "WebP", targets: ["WebP"]),
+        .library(name: "WebP", targets: ["WebP", "SharpYuv"]),
         .library(name: "WebPDecoder", targets: ["WebPDecoder"]),
-        .library(name: "WebPDemux", targets: ["WebPDemux", "WebP"]),
-        .library(name: "WebPMux", targets: ["WebPMux", "WebP"]),
+        .library(name: "WebPDemux", targets: ["WebPDemux", "WebP", "SharpYuv"]),
+        .library(name: "WebPMux", targets: ["WebPMux", "WebP", "SharpYuv"]),
         .library(name: "SharpYuv", targets: ["SharpYuv"])
     ],
     targets: [
