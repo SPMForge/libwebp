@@ -30,6 +30,7 @@ jobs:
       REPOSITORY_OWNER: ${{ github.repository_owner }}
       REPOSITORY_NAME: ${{ github.event.repository.name }}
       SPM_RELEASE_ENABLE_CCACHE: "1"
+      CCACHE_KEY_SCHEMA: v2
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_BASEDIR: ${{ runner.temp }}
       CCACHE_COMPILERCHECK: content
@@ -93,6 +94,8 @@ jobs:
           else
             upstream_tag="$(python3 scripts/spm_release.py latest-fetched-upstream-stable-tag)"
           fi
+          upstream_commit="$(git rev-parse "refs/upstream-tags/${upstream_tag}^{commit}")"
+          git rev-parse --verify --quiet "refs/upstream-tags/${upstream_tag}^{commit}" >/dev/null
           package_tags_file="${RUNNER_TEMP}/existing-package-tags.txt"
           git ls-remote --tags --refs origin "refs/tags/${upstream_tag}-alpha.*" \
             | awk -F'/' 'NF { print $NF }' > "${package_tags_file}"
@@ -103,6 +106,7 @@ jobs:
           )"
 
           echo "upstream_tag=${upstream_tag}" >> "${GITHUB_OUTPUT}"
+          echo "upstream_commit=${upstream_commit}" >> "${GITHUB_OUTPUT}"
           echo "package_tag=${package_tag}" >> "${GITHUB_OUTPUT}"
 
       - name: Export upstream source tree
@@ -117,14 +121,14 @@ jobs:
 
           echo "source_dir=${source_dir}" >> "${GITHUB_OUTPUT}"
 
-      - name: Restore ccache
-        uses: actions/cache@v4
+      - name: Restore compiler cache
+        uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: libwebp-ccache-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_tag }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json') }}
+          key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json') }}
           restore-keys: |
-            libwebp-ccache-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_tag }}-
-            libwebp-ccache-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-
+            libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-
+            libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-
 
       - name: Reset ccache statistics
         run: |
@@ -190,6 +194,13 @@ jobs:
           set -euo pipefail
 
           ccache --show-stats
+
+      - name: Save compiler cache
+        if: always() && !cancelled()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/.ccache
+          key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json') }}
 
       - name: Upload validation artifacts
         if: always()

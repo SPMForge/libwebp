@@ -54,6 +54,10 @@ The build matrix covers mergeable slices for:
 - Source acquisition is defined by [`config/source-acquisition.json`](config/source-acquisition.json).
   CI builds from exported upstream tag snapshots instead of assuming the checked-out
   repository state is the release source of truth.
+- CI compiler caching follows a narrow policy: persist only `.ccache` with
+  `actions/cache`, scope it by cache schema, runner OS, Xcode version, upstream
+  source commit, and repo-local build script inputs, and avoid caching
+  `DerivedData` or other opaque Xcode build directories by default.
 - Stable package tags such as `vX.Y.Z` are reserved for the manual workflow.
   If a stable tag already exists with different generated package metadata, the
   workflow fails instead of overwriting published public artifacts.
