@@ -828,6 +828,14 @@ class WorkflowTopologyTests(unittest.TestCase):
         self.assertNotIn("CCACHE_BASEDIR: ${{ runner.temp }}", workflow_body)
         self.assertIn("ccache --show-stats", workflow_body)
         self.assertIn('--working-dir "${RUNNER_TEMP}/xcframework-build"', workflow_body)
+        self.assertIn("inspect_release_state", workflow_body)
+        self.assertIn('gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq \'.tag_name\'', workflow_body)
+        self.assertIn('if [[ "${mode}" == "skip" && "${metadata_needs_repair}" == "true" ]]; then', workflow_body)
+        self.assertIn('release_args+=(--prerelease --latest=false)', workflow_body)
+        self.assertIn('gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}"', workflow_body)
+        self.assertIn("-F make_latest=false", workflow_body)
+        self.assertIn("-F prerelease=true", workflow_body)
+        self.assertIn("-F prerelease=false", workflow_body)
         self.assertNotIn("https://github.com/webmproject/libwebp.git", workflow_body)
 
     def test_validate_workflow_checks_rendered_package_contract(self):

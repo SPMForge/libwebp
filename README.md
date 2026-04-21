@@ -67,6 +67,9 @@ The build matrix covers mergeable slices for:
 - If the latest alpha tag for an upstream release already matches the generated
   `Package.swift` but the GitHub Release is incomplete, the workflow repairs the
   missing assets instead of silently minting another prerelease number.
+- Alpha GitHub Releases are explicitly published as prereleases and are
+  normalized to `latest=false` so automated prerelease tags do not become the
+  repository's public latest release by accident.
 - Upstream tags are fetched into a dedicated `refs/upstream-tags/*` namespace in
   CI to avoid tag-name collisions with published package versions.
 - The published binaries are mergeable dynamic libraries packaged as
