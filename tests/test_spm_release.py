@@ -586,7 +586,7 @@ class HeaderLayoutTests(unittest.TestCase):
                     [
                         "install_name_tool",
                         "-id",
-                        "@rpath/WebPDemux.framework/WebPDemux",
+                        "@rpath/WebPDemux.framework/Versions/A/WebPDemux",
                         mock.ANY,
                     ]
                 ),
@@ -595,7 +595,7 @@ class HeaderLayoutTests(unittest.TestCase):
                         "install_name_tool",
                         "-change",
                         "@rpath/libwebp.7.dylib",
-                        "@rpath/WebP.framework/WebP",
+                        "@rpath/WebP.framework/Versions/A/WebP",
                         mock.ANY,
                     ]
                 ),
@@ -604,12 +604,127 @@ class HeaderLayoutTests(unittest.TestCase):
                         "install_name_tool",
                         "-change",
                         "@rpath/libsharpyuv.0.dylib",
-                        "@rpath/SharpYuv.framework/SharpYuv",
+                        "@rpath/SharpYuv.framework/Versions/A/SharpYuv",
                         mock.ANY,
                     ]
                 ),
             ],
         )
+
+    def test_assemble_framework_bundle_uses_versioned_layout_for_macos(self):
+        module = load_spm_release_module()
+        definition = module.artifact_definition_by_name("WebP")
+        platform_group = next(group for group in module.PLATFORM_GROUPS if group.identifier == "macos")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            headers_root = temp_path / "headers"
+            webp_headers = headers_root / "webp"
+            webp_headers.mkdir(parents=True)
+            (webp_headers / "decode.h").write_text("// decode\n", encoding="utf-8")
+            (webp_headers / "encode.h").write_text("// encode\n", encoding="utf-8")
+            (webp_headers / "types.h").write_text("// types\n", encoding="utf-8")
+            built_binary = temp_path / "libwebp.dylib"
+            built_binary.write_text("binary\n", encoding="utf-8")
+            built_slice = module.BuiltSlice(
+                platform_group=platform_group,
+                archive_path=temp_path / "archive.xcarchive",
+                binary_path=built_binary,
+            )
+
+            with (
+                mock.patch.object(module, "run_command"),
+                mock.patch.object(module, "linked_install_name", return_value="@rpath/libsharpyuv.0.dylib"),
+            ):
+                framework_dir = module.assemble_framework_bundle(
+                    temp_path / "frameworks",
+                    definition=definition,
+                    built_slice=built_slice,
+                    headers_root=headers_root,
+                )
+
+            current_dir = framework_dir / "Versions" / "Current"
+            self.assertTrue(current_dir.is_symlink())
+            self.assertEqual(current_dir.resolve(), (framework_dir / "Versions" / "A").resolve())
+            self.assertTrue((framework_dir / "WebP").is_symlink())
+            self.assertEqual(
+                (framework_dir / "WebP").resolve(),
+                (framework_dir / "Versions" / "A" / "WebP").resolve(),
+            )
+            self.assertTrue((framework_dir / "Headers").is_symlink())
+            self.assertEqual(
+                (framework_dir / "Headers").resolve(),
+                (framework_dir / "Versions" / "A" / "Headers").resolve(),
+            )
+            self.assertTrue((framework_dir / "Modules").is_symlink())
+            self.assertEqual(
+                (framework_dir / "Modules").resolve(),
+                (framework_dir / "Versions" / "A" / "Modules").resolve(),
+            )
+            self.assertTrue((framework_dir / "Resources").is_symlink())
+            self.assertEqual(
+                (framework_dir / "Resources").resolve(),
+                (framework_dir / "Versions" / "A" / "Resources").resolve(),
+            )
+            self.assertTrue((framework_dir / "Versions" / "A" / "Resources" / "Info.plist").exists())
+            self.assertTrue((framework_dir / "Versions" / "A" / "Modules" / "module.modulemap").exists())
+            self.assertTrue((framework_dir / "Versions" / "A" / "Headers" / "webp" / "decode.h").exists())
+
+    def test_assemble_framework_bundle_uses_versioned_install_name_for_macos(self):
+        module = load_spm_release_module()
+        definition = module.artifact_definition_by_name("WebP")
+        platform_group = next(group for group in module.PLATFORM_GROUPS if group.identifier == "macos")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            headers_root = temp_path / "headers"
+            headers_root.mkdir()
+            built_binary = temp_path / "libwebp.dylib"
+            built_binary.write_text("binary\n", encoding="utf-8")
+            built_slice = module.BuiltSlice(
+                platform_group=platform_group,
+                archive_path=temp_path / "archive.xcarchive",
+                binary_path=built_binary,
+            )
+
+            with (
+                mock.patch.object(module, "run_command") as run_command,
+                mock.patch.object(module, "linked_install_name", return_value="@rpath/libsharpyuv.0.dylib"),
+            ):
+                module.assemble_framework_bundle(
+                    temp_path / "frameworks",
+                    definition=definition,
+                    built_slice=built_slice,
+                    headers_root=headers_root,
+                )
+
+        self.assertEqual(
+            run_command.call_args_list[0],
+            mock.call(
+                [
+                    "install_name_tool",
+                    "-id",
+                    "@rpath/WebP.framework/Versions/A/WebP",
+                    mock.ANY,
+                ]
+            ),
+        )
+
+    def test_validate_framework_bundle_layout_rejects_shallow_macos_bundle(self):
+        module = load_spm_release_module()
+        platform_group = next(group for group in module.PLATFORM_GROUPS if group.identifier == "macos")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            framework_dir = Path(temp_dir) / "WebP.framework"
+            framework_dir.mkdir()
+            (framework_dir / "Info.plist").write_text("plist\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "versioned layout"):
+                module.validate_framework_bundle_layout(
+                    framework_dir,
+                    target_name="WebP",
+                    platform_group=platform_group,
+                )
 
 
 class SwiftPMFixtureTests(unittest.TestCase):

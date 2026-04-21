@@ -1335,8 +1335,37 @@ def framework_binary_name(target_name: str) -> str:
     return target_name
 
 
-def framework_install_name(target_name: str) -> str:
-    return f"@rpath/{target_name}.framework/{framework_binary_name(target_name)}"
+def is_versioned_macos_framework(platform_group: PlatformGroup) -> bool:
+    return platform_group.supported_platform == "macos"
+
+
+def framework_binary_relative_path(target_name: str, platform_group: PlatformGroup) -> Path:
+    binary_name = framework_binary_name(target_name)
+    if is_versioned_macos_framework(platform_group):
+        return Path("Versions") / "A" / binary_name
+    return Path(binary_name)
+
+
+def framework_resources_relative_dir(platform_group: PlatformGroup) -> Path:
+    if is_versioned_macos_framework(platform_group):
+        return Path("Versions") / "A" / "Resources"
+    return Path()
+
+
+def framework_headers_relative_dir(platform_group: PlatformGroup) -> Path:
+    if is_versioned_macos_framework(platform_group):
+        return Path("Versions") / "A" / "Headers"
+    return Path("Headers")
+
+
+def framework_modules_relative_dir(platform_group: PlatformGroup) -> Path:
+    if is_versioned_macos_framework(platform_group):
+        return Path("Versions") / "A" / "Modules"
+    return Path("Modules")
+
+
+def framework_install_name(target_name: str, platform_group: PlatformGroup) -> str:
+    return f"@rpath/{target_name}.framework/{framework_binary_relative_path(target_name, platform_group).as_posix()}"
 
 
 def render_framework_module_map(definition: ArtifactDefinition) -> str:
@@ -1396,15 +1425,28 @@ def assemble_framework_bundle(
     if framework_dir.exists():
         shutil.rmtree(framework_dir)
 
-    headers_dir = framework_dir / "Headers"
-    modules_dir = framework_dir / "Modules"
+    headers_dir = framework_dir / framework_headers_relative_dir(built_slice.platform_group)
+    modules_dir = framework_dir / framework_modules_relative_dir(built_slice.platform_group)
+    resources_dir = framework_dir / framework_resources_relative_dir(built_slice.platform_group)
     headers_dir.mkdir(parents=True, exist_ok=True)
     modules_dir.mkdir(parents=True, exist_ok=True)
+    resources_dir.mkdir(parents=True, exist_ok=True)
     shutil.copytree(headers_root, headers_dir, dirs_exist_ok=True)
 
-    binary_path = framework_dir / framework_binary_name(definition.target_name)
+    binary_path = framework_dir / framework_binary_relative_path(
+        definition.target_name,
+        built_slice.platform_group,
+    )
+    binary_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(built_slice.binary_path, binary_path)
-    run_command(["install_name_tool", "-id", framework_install_name(definition.target_name), str(binary_path)])
+    run_command(
+        [
+            "install_name_tool",
+            "-id",
+            framework_install_name(definition.target_name, built_slice.platform_group),
+            str(binary_path),
+        ]
+    )
 
     for dependency_name in definition.linked_binary_dependencies:
         dependency = artifact_definition_by_name(dependency_name)
@@ -1414,7 +1456,7 @@ def assemble_framework_bundle(
                 "install_name_tool",
                 "-change",
                 current_install_name,
-                framework_install_name(dependency.target_name),
+                framework_install_name(dependency.target_name, built_slice.platform_group),
                 str(binary_path),
             ]
         )
@@ -1423,7 +1465,19 @@ def assemble_framework_bundle(
         render_framework_module_map(definition),
         encoding="utf-8",
     )
-    (framework_dir / "Info.plist").write_bytes(framework_info_plist_bytes(definition.target_name))
+    (resources_dir / "Info.plist").write_bytes(framework_info_plist_bytes(definition.target_name))
+
+    if is_versioned_macos_framework(built_slice.platform_group):
+        versions_dir = framework_dir / "Versions"
+        current_link = versions_dir / "Current"
+        current_link.symlink_to("A")
+        for link_name, relative_target in (
+            (framework_binary_name(definition.target_name), Path("Versions") / "Current" / framework_binary_name(definition.target_name)),
+            ("Headers", Path("Versions") / "Current" / "Headers"),
+            ("Modules", Path("Versions") / "Current" / "Modules"),
+            ("Resources", Path("Versions") / "Current" / "Resources"),
+        ):
+            (framework_dir / link_name).symlink_to(relative_target)
     return framework_dir
 
 
@@ -1492,6 +1546,32 @@ def validate_binary_platform(binary_path: Path, expected_platform: str) -> None:
         )
 
 
+def validate_framework_bundle_layout(framework_dir: Path, *, target_name: str, platform_group: PlatformGroup) -> None:
+    if is_versioned_macos_framework(platform_group):
+        expected_paths = (
+            framework_dir / "Versions" / "Current",
+            framework_dir / "Versions" / "A" / framework_binary_name(target_name),
+            framework_dir / "Versions" / "A" / "Headers",
+            framework_dir / "Versions" / "A" / "Modules" / "module.modulemap",
+            framework_dir / "Versions" / "A" / "Resources" / "Info.plist",
+            framework_dir / framework_binary_name(target_name),
+            framework_dir / "Headers",
+            framework_dir / "Modules",
+            framework_dir / "Resources",
+        )
+        missing_paths = [path for path in expected_paths if not path.exists()]
+        if missing_paths:
+            raise RuntimeError(
+                "macOS framework bundle is missing versioned layout paths for "
+                + f"{target_name}: {', '.join(str(path) for path in missing_paths)}"
+            )
+        return
+
+    info_path = framework_dir / "Info.plist"
+    if not info_path.exists():
+        raise RuntimeError(f"Framework bundle is missing Info.plist: {info_path}")
+
+
 def validate_xcframeworks(xcframeworks: dict[str, Path]) -> None:
     for definition in ARTIFACT_DEFINITIONS:
         xcframework_dir = xcframeworks[definition.target_name]
@@ -1527,6 +1607,11 @@ def validate_xcframeworks(xcframeworks: dict[str, Path]) -> None:
             binary_path = xcframework_dir / library_identifier / library_path
             if not binary_path.exists():
                 raise RuntimeError(f"Missing XCFramework binary slice: {binary_path}")
+            validate_framework_bundle_layout(
+                xcframework_dir / library_identifier / f"{definition.target_name}.framework",
+                target_name=definition.target_name,
+                platform_group=group,
+            )
             validate_binary_platform(binary_path, group.expected_vtool_platform)
 
 
@@ -1601,6 +1686,7 @@ def write_cmake_consumer_fixture(consumer_root: Path, xcframeworks: dict[str, Pa
 
 def verify_cmake_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -> None:
     project_path, build_dir = write_cmake_consumer_fixture(work_dir / "consumer-fixture", xcframeworks)
+    macos_group = next(group for group in PLATFORM_GROUPS if group.identifier == "macos")
 
     run_command(
         [
@@ -1653,7 +1739,7 @@ def verify_cmake_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path)
 
         debug_otool = command_output(["otool", "-L", str(debug_binary)])
         for dependency_name in swiftpm_product_targets(definition):
-            expected_install_name = framework_install_name(dependency_name)
+            expected_install_name = framework_install_name(dependency_name, macos_group)
             if expected_install_name not in debug_otool:
                 raise RuntimeError(
                     "Debug consumer binary for "
@@ -1714,6 +1800,7 @@ def verify_spm_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -
     )
     derived_data_path = work_dir / "spm-consumer-derived-data"
     scheme_name = "libwebp-consumer"
+    macos_group = next(group for group in PLATFORM_GROUPS if group.identifier == "macos")
 
     run_command(["swift", "package", "dump-package"], cwd=binary_package_root, capture_output=True)
     run_command(["swift", "package", "dump-package"], cwd=consumer_root, capture_output=True)
@@ -1767,10 +1854,11 @@ def verify_spm_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -
 
     debug_otool = command_output(["otool", "-L", str(debug_binary)])
     for definition in ARTIFACT_DEFINITIONS:
-        if framework_install_name(definition.target_name) not in debug_otool:
+        expected_install_name = framework_install_name(definition.target_name, macos_group)
+        if expected_install_name not in debug_otool:
             raise RuntimeError(
                 "SwiftPM Debug consumer binary is not linked against "
-                + framework_install_name(definition.target_name)
+                + expected_install_name
             )
 
 
