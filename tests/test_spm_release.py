@@ -664,6 +664,31 @@ class HeaderLayoutTests(unittest.TestCase):
 
         self.assertEqual(include_path, Path("sharpyuv/sharpyuv_csp.h"))
 
+    def test_rewrite_public_header_text_uses_framework_style_include_for_webp_headers(self):
+        module = load_spm_release_module()
+
+        rewritten = module.rewrite_public_header_text(
+            "WebP",
+            "src/webp/decode.h",
+            '#include "./types.h"\n',
+        )
+
+        self.assertEqual(rewritten, '#include <WebP/webp/types.h>\n')
+
+    def test_rewrite_public_header_text_preserves_suffix_when_rewriting_same_framework_include(self):
+        module = load_spm_release_module()
+
+        rewritten = module.rewrite_public_header_text(
+            "WebPDemux",
+            "src/webp/demux.h",
+            '#include "./decode.h"     // for WEBP_CSP_MODE\n',
+        )
+
+        self.assertEqual(
+            rewritten,
+            '#include <WebPDemux/webp/decode.h>     // for WEBP_CSP_MODE\n',
+        )
+
     def test_rewrite_public_header_text_fixes_sharpyuv_self_include_for_framework_packaging(self):
         module = load_spm_release_module()
 
@@ -673,7 +698,51 @@ class HeaderLayoutTests(unittest.TestCase):
             '#include "sharpyuv/sharpyuv.h"\n',
         )
 
-        self.assertEqual(rewritten, '#include "./sharpyuv.h"\n')
+        self.assertEqual(rewritten, '#include <SharpYuv/sharpyuv/sharpyuv.h>\n')
+
+    def test_rewrite_public_header_text_leaves_non_exported_include_unchanged(self):
+        module = load_spm_release_module()
+
+        rewritten = module.rewrite_public_header_text(
+            "WebP",
+            "src/webp/decode.h",
+            '#include "private/internal.h"\n',
+        )
+
+        self.assertEqual(rewritten, '#include "private/internal.h"\n')
+
+    def test_write_cmake_consumer_fixture_adds_framework_search_paths_for_nested_header_imports(self):
+        module = load_spm_release_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            xcframeworks: dict[str, Path] = {}
+            for definition in module.ARTIFACT_DEFINITIONS:
+                xcframework_path = temp_path / definition.xcframework_name
+                (xcframework_path / "macos-arm64_x86_64").mkdir(parents=True)
+                xcframeworks[definition.target_name] = xcframework_path
+
+            def fake_run_command(*args, **kwargs):
+                build_dir = temp_path / "consumer" / "build"
+                build_dir.mkdir(parents=True, exist_ok=True)
+                (build_dir / "spm_libwebp_consumer.xcodeproj").mkdir(exist_ok=True)
+
+            with mock.patch.object(module, "run_command", side_effect=fake_run_command):
+                module.write_cmake_consumer_fixture(temp_path / "consumer", xcframeworks)
+
+            cmake_contents = (temp_path / "consumer" / "CMakeLists.txt").read_text(
+                encoding="utf-8"
+            )
+
+        self.assertIn('target_compile_options(SmokeWebP PRIVATE "-F', cmake_contents)
+        self.assertIn(
+            f'-F{module.cmake_quote(str(xcframeworks["WebP"] / "macos-arm64_x86_64"))}',
+            cmake_contents,
+        )
+        self.assertIn(
+            f'-F{module.cmake_quote(str(xcframeworks["SharpYuv"] / "macos-arm64_x86_64"))}',
+            cmake_contents,
+        )
 
     def test_assemble_framework_bundle_rewrites_all_direct_linked_binary_dependencies(self):
         module = load_spm_release_module()

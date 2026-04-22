@@ -6,6 +6,7 @@ import argparse
 import dataclasses
 import json
 import os
+import posixpath
 import plistlib
 import re
 import shutil
@@ -26,6 +27,9 @@ if sys.version_info < (3, 10):
 STABLE_TAG_PATTERN = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 PACKAGE_RELEASE_TAG_PATTERN = re.compile(r"^v(\d+)\.(\d+)\.(\d+)-alpha\.(\d+)$")
 CHECKSUM_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+QUOTED_INCLUDE_PATTERN = re.compile(
+    r'^(?P<prefix>\s*#\s*(?:include|import)\s*)"(?P<target>[^"]+)"(?P<suffix>.*)$'
+)
 RELEASE_METADATA_ASSETS: tuple[str, ...] = ("checksums.json",)
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ACQUISITION_CONFIG_PATH = REPO_ROOT / "config" / "source-acquisition.json"
@@ -1144,10 +1148,63 @@ def header_include_path(target_name: str, relative_path: str) -> Path:
     return source_path
 
 
+def normalize_header_reference(path: str) -> str:
+    return posixpath.normpath(path.replace("\\", "/"))
+
+
+def exported_header_include_paths(target_name: str) -> set[str]:
+    definition = artifact_definition_by_name(target_name)
+    return {
+        header_include_path(definition.target_name, relative_path).as_posix()
+        for relative_path in definition.public_headers
+    }
+
+
+def resolve_same_framework_header_include(
+    target_name: str,
+    current_header_path: Path,
+    include_target: str,
+) -> str | None:
+    exported_paths = exported_header_include_paths(target_name)
+    normalized_exact = normalize_header_reference(include_target)
+    if normalized_exact in exported_paths:
+        return normalized_exact
+
+    normalized_relative = normalize_header_reference(
+        posixpath.join(current_header_path.parent.as_posix(), include_target)
+    )
+    if normalized_relative in exported_paths:
+        return normalized_relative
+    return None
+
+
 def rewrite_public_header_text(target_name: str, relative_path: str, contents: str) -> str:
-    if target_name == "SharpYuv" and relative_path == "sharpyuv/sharpyuv_csp.h":
-        return contents.replace('#include "sharpyuv/sharpyuv.h"', '#include "./sharpyuv.h"')
-    return contents
+    current_header_path = header_include_path(target_name, relative_path)
+    rewritten_lines: list[str] = []
+    for raw_line in contents.splitlines(keepends=True):
+        line = raw_line.rstrip("\r\n")
+        newline = raw_line[len(line) :]
+        match = QUOTED_INCLUDE_PATTERN.match(line)
+        if match is None:
+            rewritten_lines.append(raw_line)
+            continue
+
+        rewritten_target = resolve_same_framework_header_include(
+            target_name,
+            current_header_path,
+            match.group("target"),
+        )
+        if rewritten_target is None:
+            rewritten_lines.append(raw_line)
+            continue
+
+        rewritten_lines.append(
+            match.group("prefix")
+            + f"<{target_name}/{rewritten_target}>"
+            + match.group("suffix")
+            + newline
+        )
+    return "".join(rewritten_lines)
 
 
 def prepare_header_directories(source_dir: Path, output_root: Path) -> dict[str, Path]:
@@ -1639,9 +1696,15 @@ def write_cmake_consumer_fixture(consumer_root: Path, xcframeworks: dict[str, Pa
             / f"{definition.target_name}.framework"
         )
         header_dir = library_root / "Headers"
+        framework_search_paths: list[str] = []
         frameworks = []
         for dependency_name in swiftpm_product_targets(definition):
             dependency = artifact_definition_by_name(dependency_name)
+            framework_search_path = cmake_quote(
+                str(xcframeworks[dependency.target_name] / "macos-arm64_x86_64")
+            )
+            if framework_search_path not in framework_search_paths:
+                framework_search_paths.append(framework_search_path)
             frameworks.append(
                 cmake_quote(
                     str(
@@ -1658,6 +1721,11 @@ def write_cmake_consumer_fixture(consumer_root: Path, xcframeworks: dict[str, Pa
             [
                 f"add_executable({target_name} MACOSX_BUNDLE src/{definition.target_name}.c)",
                 f'target_include_directories({target_name} PRIVATE "{cmake_quote(str(header_dir))}")',
+                "target_compile_options("
+                + target_name
+                + " PRIVATE "
+                + " ".join(f'"-F{framework_path}"' for framework_path in framework_search_paths)
+                + ")",
                 "target_link_libraries("
                 + target_name
                 + " PRIVATE "
