@@ -1,0 +1,166 @@
+{
+  "deployment_targets": {
+    "ios": {
+      "swiftpm_platform": "iOS",
+      "version": "13.0",
+      "emit_to_package_manifest": true
+    },
+    "macos": {
+      "swiftpm_platform": "macOS",
+      "version": "10.15",
+      "emit_to_package_manifest": true
+    },
+    "maccatalyst": {
+      "swiftpm_platform": "macCatalyst",
+      "version": "14.0",
+      "emit_to_package_manifest": false
+    },
+    "tvos": {
+      "swiftpm_platform": "tvOS",
+      "version": "13.0",
+      "emit_to_package_manifest": true
+    },
+    "watchos": {
+      "swiftpm_platform": "watchOS",
+      "version": "8.0",
+      "emit_to_package_manifest": true
+    },
+    "visionos": {
+      "swiftpm_platform": "visionOS",
+      "version": "1.0",
+      "emit_to_package_manifest": true
+    }
+  },
+  "build_matrix": [
+    {
+      "name": "iOS",
+      "identifier": "ios",
+      "family": "ios",
+      "supported_platform": "ios",
+      "sdk": "iphoneos",
+      "cmake_system_name": "iOS",
+      "deployment_setting": "IPHONEOS_DEPLOYMENT_TARGET",
+      "architectures": ["arm64"],
+      "expected_vtool_platform": "IOS",
+      "destination": "generic/platform=iOS"
+    },
+    {
+      "name": "iOS Simulator",
+      "identifier": "ios-simulator",
+      "family": "ios",
+      "supported_platform": "ios",
+      "supported_platform_variant": "simulator",
+      "sdk": "iphonesimulator",
+      "cmake_system_name": "iOS",
+      "deployment_setting": "IPHONEOS_DEPLOYMENT_TARGET",
+      "architectures": ["arm64", "x86_64"],
+      "expected_vtool_platform": "IOSSIMULATOR",
+      "simulator": true,
+      "destination": "generic/platform=iOS Simulator"
+    },
+    {
+      "name": "macOS",
+      "identifier": "macos",
+      "family": "macos",
+      "supported_platform": "macos",
+      "sdk": "macosx",
+      "cmake_system_name": null,
+      "deployment_setting": "MACOSX_DEPLOYMENT_TARGET",
+      "architectures": ["arm64", "x86_64"],
+      "expected_vtool_platform": "MACOS",
+      "destination": "generic/platform=macOS"
+    },
+    {
+      "name": "Mac Catalyst",
+      "identifier": "mac-catalyst",
+      "family": "maccatalyst",
+      "supported_platform": "ios",
+      "supported_platform_variant": "maccatalyst",
+      "sdk": "macosx",
+      "cmake_system_name": null,
+      "deployment_setting": "IPHONEOS_DEPLOYMENT_TARGET",
+      "architectures": ["arm64", "x86_64"],
+      "expected_vtool_platform": "MACCATALYST",
+      "catalyst": true,
+      "destination": "generic/platform=macOS,variant=Mac Catalyst"
+    },
+    {
+      "name": "tvOS",
+      "identifier": "tvos",
+      "family": "tvos",
+      "supported_platform": "tvos",
+      "sdk": "appletvos",
+      "cmake_system_name": "tvOS",
+      "deployment_setting": "TVOS_DEPLOYMENT_TARGET",
+      "architectures": ["arm64"],
+      "expected_vtool_platform": "TVOS",
+      "destination": "generic/platform=tvOS"
+    },
+    {
+      "name": "tvOS Simulator",
+      "identifier": "tvos-simulator",
+      "family": "tvos",
+      "supported_platform": "tvos",
+      "supported_platform_variant": "simulator",
+      "sdk": "appletvsimulator",
+      "cmake_system_name": "tvOS",
+      "deployment_setting": "TVOS_DEPLOYMENT_TARGET",
+      "architectures": ["arm64", "x86_64"],
+      "expected_vtool_platform": "TVOSSIMULATOR",
+      "simulator": true,
+      "destination": "generic/platform=tvOS Simulator"
+    },
+    {
+      "name": "watchOS",
+      "identifier": "watchos",
+      "family": "watchos",
+      "supported_platform": "watchos",
+      "sdk": "watchos",
+      "cmake_system_name": "watchOS",
+      "deployment_setting": "WATCHOS_DEPLOYMENT_TARGET",
+      "architectures": ["arm64", "arm64_32"],
+      "expected_vtool_platform": "WATCHOS",
+      "destination": "generic/platform=watchOS"
+    },
+    {
+      "name": "watchOS Simulator",
+      "identifier": "watchos-simulator",
+      "family": "watchos",
+      "supported_platform": "watchos",
+      "supported_platform_variant": "simulator",
+      "sdk": "watchsimulator",
+      "cmake_system_name": "watchOS",
+      "deployment_setting": "WATCHOS_DEPLOYMENT_TARGET",
+      "architectures": ["arm64", "x86_64"],
+      "expected_vtool_platform": "WATCHOSSIMULATOR",
+      "simulator": true,
+      "destination": "generic/platform=watchOS Simulator"
+    },
+    {
+      "name": "visionOS",
+      "identifier": "visionos",
+      "family": "visionos",
+      "supported_platform": "xros",
+      "sdk": "xros",
+      "cmake_system_name": "visionOS",
+      "deployment_setting": "XROS_DEPLOYMENT_TARGET",
+      "architectures": ["arm64"],
+      "expected_vtool_platform": "VISIONOS",
+      "destination": "generic/platform=visionOS"
+    },
+    {
+      "name": "visionOS Simulator",
+      "identifier": "visionos-simulator",
+      "family": "visionos",
+      "supported_platform": "xros",
+      "supported_platform_variant": "simulator",
+      "sdk": "xrsimulator",
+      "cmake_system_name": "visionOS",
+      "deployment_setting": "XROS_DEPLOYMENT_TARGET",
+      "architectures": ["arm64", "x86_64"],
+      "expected_vtool_platform": "VISIONOSSIMULATOR",
+      "simulator": true,
+      "destination": "generic/platform=visionOS Simulator"
+    }
+  ]
+}

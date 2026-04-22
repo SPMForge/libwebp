@@ -57,6 +57,10 @@ The build matrix covers mergeable slices for:
 - Source acquisition is defined by [`config/source-acquisition.json`](config/source-acquisition.json).
   CI builds from exported upstream tag snapshots instead of assuming the checked-out
   repository state is the release source of truth.
+- Apple deployment targets and build-matrix ownership are centralized in
+  [`config/platforms.json`](config/platforms.json). `Package.swift`, the Apple
+  archive matrix, and plan introspection all derive from that single data model
+  instead of hand-maintained per-call-site literals.
 - CI compiler caching follows a narrow policy: persist only `.ccache` with
   `actions/cache`, scope it by cache schema, runner OS, Xcode version, upstream
   source commit, and repo-local build script inputs, and avoid caching
@@ -141,8 +145,10 @@ The repository ships two release helpers:
   checksums, prints the Apple build matrix, builds mergeable XCFrameworks,
   validates mergeable metadata, and runs local macOS consumer smoke tests for
   both the direct XCFramework path and a real SwiftPM binary-target integration
-  in Debug and Release. It also owns the repo-local source acquisition contract
-  used by CI to fetch and export upstream source snapshots.
+  in Debug and Release. It keeps the CLI surface stable while delegating stable
+  rules to `scripts/spm_release_support/` modules for platform contract,
+  release planning, and package-validation logic. It also owns the repo-local
+  source acquisition contract used by CI to fetch and export upstream source snapshots.
 - [`scripts/build_apple_xcframeworks.sh`](scripts/build_apple_xcframeworks.sh):
   thin wrapper around the Python release tool for local use and CI.
 - [`.github/workflows/validate-apple-release-pipeline.yml`](.github/workflows/validate-apple-release-pipeline.yml):

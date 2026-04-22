@@ -197,7 +197,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json') }}
+          key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json', 'config/platforms.json') }}
           restore-keys: |
             libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-
             libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-
@@ -247,7 +247,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json') }}
+          key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json', 'config/platforms.json') }}
 
       - name: Select package publication tag
         id: publication

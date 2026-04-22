@@ -130,7 +130,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json') }}
+          key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json', 'config/platforms.json') }}
           restore-keys: |
             libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-
             libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-
@@ -146,6 +146,12 @@ jobs:
           set -euo pipefail
 
           python3 -m unittest tests/test_spm_release.py
+
+      - name: Verify SOP conformance
+        run: |
+          set -euo pipefail
+
+          python3 scripts/verify_sop_conformance.py
 
       - name: Validate workflow YAML
         run: |
@@ -205,7 +211,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/.ccache
-          key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json') }}
+          key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json', 'config/platforms.json') }}
 
       - name: Upload validation artifacts
         if: always()

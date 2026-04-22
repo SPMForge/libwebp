@@ -1249,6 +1249,7 @@ class WorkflowTopologyTests(unittest.TestCase):
         self.assertIn("path: ${{ github.workspace }}/.ccache", workflow_body)
         self.assertIn("steps.release_tag.outputs.upstream_commit", workflow_body)
         self.assertIn("libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}", workflow_body)
+        self.assertIn("config/platforms.json", workflow_body)
         self.assertIn(
             'git ls-remote --tags --refs origin "refs/tags/${stable_package_tag}-alpha.*"',
             workflow_body,
@@ -1309,6 +1310,7 @@ class WorkflowTopologyTests(unittest.TestCase):
         self.assertIn("path: ${{ github.workspace }}/.ccache", workflow_body)
         self.assertIn("steps.release_tag.outputs.upstream_commit", workflow_body)
         self.assertIn("libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}", workflow_body)
+        self.assertIn("config/platforms.json", workflow_body)
         self.assertIn('echo "CCACHE_BASEDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"', workflow_body)
         self.assertNotIn("CCACHE_BASEDIR: ${{ runner.temp }}", workflow_body)
         self.assertIn("ccache --show-stats", workflow_body)
