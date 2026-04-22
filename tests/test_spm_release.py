@@ -1218,7 +1218,7 @@ class WorkflowTopologyTests(unittest.TestCase):
         self.assertIn("uses: ./.github/workflows/publish-package-release-core.yml", workflow_body)
         self.assertIn("selection_mode: latest", workflow_body)
         self.assertIn("release_channel: alpha", workflow_body)
-        self.assertIn("publish_to_main: true", workflow_body)
+        self.assertIn("publish_to_main: false", workflow_body)
 
     def test_manual_publish_workflow_uses_shared_publish_core(self):
         workflow_body = PUBLISH_MANUAL_WORKFLOW_PATH.read_text(encoding="utf-8")
