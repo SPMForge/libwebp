@@ -248,6 +248,13 @@ def deployment_target_model(path: Path = DEFAULT_PLATFORM_CONTRACT_PATH) -> dict
     return normalized
 
 
+def deployment_target_version(family: str, path: Path = DEFAULT_PLATFORM_CONTRACT_PATH) -> str:
+    deployment_targets = deployment_target_model(path)
+    if family not in deployment_targets:
+        raise ValueError(f"Unknown deployment target family: {family}")
+    return str(deployment_targets[family]["version"])
+
+
 def _platform_group_from_entry(
     entry: dict[str, object],
     deployment_targets: dict[str, dict[str, object]],

@@ -42,6 +42,7 @@ from spm_release_support.platform_contract import (
     PlatformGroup,
     BuiltSlice,
     PLATFORM_GROUPS,
+    deployment_target_version,
     artifact_definition_by_name,
     build_plan_payload,
     swiftpm_product_targets,
@@ -58,6 +59,7 @@ from spm_release_support.release_planning import (
     require_stable_tag,
     required_release_asset_names,
     select_latest_stable_tag,
+    resolve_release_publication,
 )
 
 QUOTED_INCLUDE_PATTERN = re.compile(
@@ -950,6 +952,7 @@ def write_cmake_consumer_fixture(consumer_root: Path, xcframeworks: dict[str, Pa
 def verify_cmake_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -> None:
     project_path, build_dir = write_cmake_consumer_fixture(work_dir / "consumer-fixture", xcframeworks)
     macos_group = next(group for group in PLATFORM_GROUPS if group.identifier == "macos")
+    macos_deployment_target = deployment_target_version("macos")
 
     run_command(
         [
@@ -961,7 +964,7 @@ def verify_cmake_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path)
             "-configuration",
             "Debug",
             "build",
-            "MACOSX_DEPLOYMENT_TARGET=10.15",
+            f"MACOSX_DEPLOYMENT_TARGET={macos_deployment_target}",
             "CODE_SIGNING_ALLOWED=NO",
             "CODE_SIGNING_REQUIRED=NO",
         ],
@@ -978,7 +981,7 @@ def verify_cmake_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path)
             "-configuration",
             "Release",
             "build",
-            "MACOSX_DEPLOYMENT_TARGET=10.15",
+            f"MACOSX_DEPLOYMENT_TARGET={macos_deployment_target}",
             "MERGED_BINARY_TYPE=automatic",
             "CODE_SIGNING_ALLOWED=NO",
             "CODE_SIGNING_REQUIRED=NO",
@@ -1064,6 +1067,7 @@ def verify_spm_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -
     derived_data_path = work_dir / "spm-consumer-derived-data"
     scheme_name = "libwebp-consumer"
     macos_group = next(group for group in PLATFORM_GROUPS if group.identifier == "macos")
+    macos_deployment_target = deployment_target_version("macos")
 
     run_command(["swift", "package", "dump-package"], cwd=binary_package_root, capture_output=True)
     run_command(["swift", "package", "dump-package"], cwd=consumer_root, capture_output=True)
@@ -1079,6 +1083,7 @@ def verify_spm_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -
             str(derived_data_path),
             "-destination",
             "platform=macOS",
+            f"MACOSX_DEPLOYMENT_TARGET={macos_deployment_target}",
             "build",
         ],
         cwd=consumer_root,
@@ -1096,6 +1101,7 @@ def verify_spm_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -
             str(derived_data_path),
             "-destination",
             "platform=macOS",
+            f"MACOSX_DEPLOYMENT_TARGET={macos_deployment_target}",
             "MERGED_BINARY_TYPE=automatic",
             "build",
         ],
@@ -1348,6 +1354,38 @@ def command_release_publish_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _read_optional_text(path_value: str | None) -> str | None:
+    if not path_value:
+        return None
+    return Path(path_value).read_text(encoding="utf-8")
+
+
+def _read_release_asset_names(path_value: str) -> tuple[str, ...]:
+    release_assets_path = Path(path_value)
+    if not release_assets_path.exists():
+        return ()
+    asset_names = [line.strip() for line in release_assets_path.read_text(encoding="utf-8").splitlines()]
+    return tuple(asset_name for asset_name in asset_names if asset_name)
+
+
+def command_resolve_release_publication(args: argparse.Namespace) -> int:
+    resolution = resolve_release_publication(
+        release_channel=args.release_channel,
+        build_tag=args.build_tag,
+        latest_package_tag=args.latest_package_tag or None,
+        rendered_package_swift=Path(args.rendered_package_swift).read_text(encoding="utf-8"),
+        candidate_package_swift=_read_optional_text(args.candidate_package_swift or None),
+        release_asset_names=_read_release_asset_names(args.release_assets_file),
+        release_exists=args.release_exists,
+        release_is_prerelease=args.release_is_prerelease,
+        release_is_latest=args.release_is_latest,
+        remote_tag_exists=args.remote_tag_exists,
+        remote_tag_commit=args.remote_tag_commit or None,
+    )
+    print(json.dumps(dataclasses.asdict(resolution), indent=2))
+    return 0
+
+
 def command_print_build_plan(_: argparse.Namespace) -> int:
     print(json.dumps(build_plan_payload(), indent=2))
     return 0
@@ -1481,6 +1519,27 @@ def build_parser() -> argparse.ArgumentParser:
     release_publish_plan_parser.add_argument("--tag-exists", action="store_true")
     release_publish_plan_parser.add_argument("--asset", dest="assets", action="append", default=[])
     release_publish_plan_parser.set_defaults(func=command_release_publish_plan)
+
+    resolve_release_publication_parser = subparsers.add_parser(
+        "resolve-release-publication",
+        help="Resolve the final publication tag and release mode from rendered package state.",
+    )
+    resolve_release_publication_parser.add_argument(
+        "--release-channel",
+        choices=("alpha", "stable"),
+        required=True,
+    )
+    resolve_release_publication_parser.add_argument("--build-tag", required=True)
+    resolve_release_publication_parser.add_argument("--latest-package-tag", default="")
+    resolve_release_publication_parser.add_argument("--rendered-package-swift", required=True)
+    resolve_release_publication_parser.add_argument("--candidate-package-swift", default="")
+    resolve_release_publication_parser.add_argument("--release-assets-file", required=True)
+    resolve_release_publication_parser.add_argument("--remote-tag-commit", default="")
+    resolve_release_publication_parser.add_argument("--release-exists", action="store_true")
+    resolve_release_publication_parser.add_argument("--release-is-prerelease", action="store_true")
+    resolve_release_publication_parser.add_argument("--release-is-latest", action="store_true")
+    resolve_release_publication_parser.add_argument("--remote-tag-exists", action="store_true")
+    resolve_release_publication_parser.set_defaults(func=command_resolve_release_publication)
 
     build_plan_parser = subparsers.add_parser(
         "print-build-plan",

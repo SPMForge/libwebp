@@ -27,6 +27,18 @@ class ReleasePublicationPlan:
     missing_assets: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class ReleasePublicationResolution:
+    final_package_tag: str
+    mode: str
+    required_assets: tuple[str, ...]
+    missing_assets: tuple[str, ...]
+    metadata_needs_repair: bool
+    release_exists: bool
+    remote_tag_exists: bool
+    remote_tag_commit: str | None
+
+
 def require_stable_tag(tag: str) -> tuple[int, int, int]:
     match = STABLE_TAG_PATTERN.fullmatch(tag)
     if match is None:
@@ -167,3 +179,65 @@ def plan_release_publication(
     if missing_assets:
         return ReleasePublicationPlan(mode="repair", required_assets=required_assets, missing_assets=missing_assets)
     return ReleasePublicationPlan(mode="skip", required_assets=required_assets, missing_assets=())
+
+
+def resolve_release_publication(
+    *,
+    release_channel: str,
+    build_tag: str,
+    latest_package_tag: str | None,
+    rendered_package_swift: str,
+    candidate_package_swift: str | None,
+    release_asset_names: Iterable[str],
+    release_exists: bool,
+    release_is_prerelease: bool,
+    release_is_latest: bool,
+    remote_tag_exists: bool,
+    remote_tag_commit: str | None,
+) -> ReleasePublicationResolution:
+    if release_channel not in {"alpha", "stable"}:
+        raise ValueError(f"Unsupported release channel: {release_channel}")
+
+    if release_channel == "stable":
+        if candidate_package_swift is not None and candidate_package_swift != rendered_package_swift:
+            raise ValueError(
+                "Stable publication refused because the existing Package.swift does not match the rendered one."
+            )
+        final_package_tag = build_tag
+    else:
+        if (
+            latest_package_tag is not None
+            and candidate_package_swift is not None
+            and candidate_package_swift == rendered_package_swift
+        ):
+            final_package_tag = latest_package_tag
+        else:
+            final_package_tag = build_tag
+
+    publication_plan = plan_release_publication(
+        tag=final_package_tag,
+        remote_tag_exists=remote_tag_exists,
+        release_asset_names=release_asset_names,
+    )
+
+    metadata_needs_repair = False
+    if release_exists:
+        if release_channel == "stable":
+            metadata_needs_repair = release_is_prerelease
+        else:
+            metadata_needs_repair = (not release_is_prerelease) or release_is_latest
+
+    mode = publication_plan.mode
+    if mode == "skip" and metadata_needs_repair:
+        mode = "repair"
+
+    return ReleasePublicationResolution(
+        final_package_tag=final_package_tag,
+        mode=mode,
+        required_assets=publication_plan.required_assets,
+        missing_assets=publication_plan.missing_assets,
+        metadata_needs_repair=metadata_needs_repair,
+        release_exists=release_exists,
+        remote_tag_exists=remote_tag_exists,
+        remote_tag_commit=remote_tag_commit,
+    )

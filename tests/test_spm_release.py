@@ -132,6 +132,13 @@ class PackageReleaseTagTests(unittest.TestCase):
         )
 
 
+class PlatformContractTests(unittest.TestCase):
+    def test_deployment_target_version_reads_macos_contract(self):
+        module = load_spm_release_module()
+
+        self.assertEqual(module.deployment_target_version("macos"), "10.15")
+
+
 class ReleaseArtifactTests(unittest.TestCase):
     def test_release_artifacts_are_versioned_xcframework_archives(self):
         module = load_spm_release_module()
@@ -413,6 +420,70 @@ class ReleasePublicationPlanTests(unittest.TestCase):
                 "checksums.json",
             ),
         )
+
+
+class ReleasePublicationResolutionTests(unittest.TestCase):
+    def test_resolve_release_publication_prefers_latest_alpha_tag_when_package_swift_matches(self):
+        module = load_spm_release_module()
+        rendered_package_swift = "package.swift\n"
+
+        resolution = module.resolve_release_publication(
+            release_channel="alpha",
+            build_tag="1.6.0-alpha.2",
+            latest_package_tag="1.6.0-alpha.1",
+            rendered_package_swift=rendered_package_swift,
+            candidate_package_swift=rendered_package_swift,
+            release_asset_names=module.required_release_asset_names("1.6.0-alpha.1"),
+            release_exists=True,
+            release_is_prerelease=True,
+            release_is_latest=False,
+            remote_tag_exists=True,
+            remote_tag_commit="abc123",
+        )
+
+        self.assertEqual(resolution.final_package_tag, "1.6.0-alpha.1")
+        self.assertEqual(resolution.mode, "skip")
+        self.assertFalse(resolution.metadata_needs_repair)
+
+    def test_resolve_release_publication_turns_latest_alpha_metadata_drift_into_repair(self):
+        module = load_spm_release_module()
+        rendered_package_swift = "package.swift\n"
+
+        resolution = module.resolve_release_publication(
+            release_channel="alpha",
+            build_tag="1.6.0-alpha.1",
+            latest_package_tag="1.6.0-alpha.1",
+            rendered_package_swift=rendered_package_swift,
+            candidate_package_swift=rendered_package_swift,
+            release_asset_names=module.required_release_asset_names("1.6.0-alpha.1"),
+            release_exists=True,
+            release_is_prerelease=True,
+            release_is_latest=True,
+            remote_tag_exists=True,
+            remote_tag_commit="abc123",
+        )
+
+        self.assertEqual(resolution.final_package_tag, "1.6.0-alpha.1")
+        self.assertEqual(resolution.mode, "repair")
+        self.assertTrue(resolution.metadata_needs_repair)
+
+    def test_resolve_release_publication_rejects_mismatched_stable_package_swift(self):
+        module = load_spm_release_module()
+
+        with self.assertRaisesRegex(ValueError, "does not match the rendered one"):
+            module.resolve_release_publication(
+                release_channel="stable",
+                build_tag=STABLE_PACKAGE_TAG,
+                latest_package_tag=None,
+                rendered_package_swift="rendered\n",
+                candidate_package_swift="different\n",
+                release_asset_names=module.required_release_asset_names(STABLE_PACKAGE_TAG),
+                release_exists=True,
+                release_is_prerelease=False,
+                release_is_latest=False,
+                remote_tag_exists=True,
+                remote_tag_commit="abc123",
+            )
 
 
 class ReleaseCommandTests(unittest.TestCase):
@@ -1259,13 +1330,15 @@ class WorkflowTopologyTests(unittest.TestCase):
         self.assertIn("ccache --show-stats", workflow_body)
         self.assertIn('--working-dir "${RUNNER_TEMP}/xcframework-build"', workflow_body)
         self.assertIn("inspect_release_state", workflow_body)
-        self.assertIn('gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq \'.tag_name\'', workflow_body)
-        self.assertIn('if [[ "${mode}" == "skip" && "${metadata_needs_repair}" == "true" ]]; then', workflow_body)
+        self.assertIn("resolve-release-publication", workflow_body)
+        self.assertIn("--release-assets-file", workflow_body)
         self.assertIn('release_args+=(--prerelease --latest=false)', workflow_body)
         self.assertIn('gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}"', workflow_body)
         self.assertIn("-F make_latest=false", workflow_body)
         self.assertIn("-F prerelease=true", workflow_body)
         self.assertIn("-F prerelease=false", workflow_body)
+        self.assertNotIn('if [[ "${mode}" == "skip" && "${metadata_needs_repair}" == "true" ]]; then', workflow_body)
+        self.assertNotIn("release-publish-plan --tag", workflow_body)
         self.assertNotIn("https://github.com/webmproject/libwebp.git", workflow_body)
 
     def test_validate_workflow_checks_rendered_package_contract(self):

@@ -338,30 +338,8 @@ jobs:
               fi
 
               inspect_release_state "${final_package_tag}"
-
-              plan_args=(release-publish-plan --tag "${final_package_tag}" --tag-exists)
-              while IFS= read -r asset_name; do
-                [[ -n "${asset_name}" ]] || continue
-                plan_args+=(--asset "${asset_name}")
-              done < "${release_assets_file}"
-
-              plan_json="$(python3 scripts/spm_release.py "${plan_args[@]}")"
-              mode="$(printf '%s' "${plan_json}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')"
-              missing_assets="$(
-                printf '%s' "${plan_json}" \
-                  | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["missing_assets"]))'
-              )"
-
-              if [[ "${release_is_prerelease}" == "true" ]]; then
-                metadata_needs_repair=true
-              fi
             else
-              plan_json="$(python3 scripts/spm_release.py release-publish-plan --tag "${final_package_tag}")"
-              mode="$(printf '%s' "${plan_json}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')"
-              missing_assets="$(
-                printf '%s' "${plan_json}" \
-                  | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["missing_assets"]))'
-              )"
+              :
             fi
           else
             render_package "${build_tag}"
@@ -372,24 +350,6 @@ jobs:
                 final_package_tag="${latest_package_tag}"
                 remote_tag_exists=true
                 remote_tag_commit="${{ steps.release_tag.outputs.remote_tag_commit }}"
-                inspect_release_state "${final_package_tag}"
-
-                plan_args=(release-publish-plan --tag "${final_package_tag}" --tag-exists)
-                while IFS= read -r asset_name; do
-                  [[ -n "${asset_name}" ]] || continue
-                  plan_args+=(--asset "${asset_name}")
-                done < "${release_assets_file}"
-
-                plan_json="$(python3 scripts/spm_release.py "${plan_args[@]}")"
-                mode="$(printf '%s' "${plan_json}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')"
-                missing_assets="$(
-                  printf '%s' "${plan_json}" \
-                    | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["missing_assets"]))'
-                )"
-
-                if [[ "${release_is_prerelease}" != "true" || "${release_is_latest}" == "true" ]]; then
-                  metadata_needs_repair=true
-                fi
               else
                 final_package_tag="${next_package_tag}"
               fi
@@ -403,19 +363,52 @@ jobs:
               render_package "${final_package_tag}"
             fi
 
-            if [[ "${remote_tag_exists}" != "true" ]]; then
-              plan_json="$(python3 scripts/spm_release.py release-publish-plan --tag "${final_package_tag}")"
-              mode="$(printf '%s' "${plan_json}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')"
-              missing_assets="$(
-                printf '%s' "${plan_json}" \
-                  | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["missing_assets"]))'
-              )"
+            if [[ "${remote_tag_exists}" == "true" ]]; then
+              inspect_release_state "${final_package_tag}"
             fi
           fi
 
-          if [[ "${mode}" == "skip" && "${metadata_needs_repair}" == "true" ]]; then
-            mode="repair"
+          plan_args=(
+            resolve-release-publication
+            --release-channel "${release_channel}"
+            --build-tag "${final_package_tag}"
+            --rendered-package-swift "${metadata_dir}/Package.swift"
+            --release-assets-file "${release_assets_file}"
+          )
+
+          if [[ "${release_channel}" == "stable" && -f "${existing_package_file}" ]]; then
+            plan_args+=(--candidate-package-swift "${existing_package_file}")
           fi
+          if [[ "${remote_tag_exists}" == "true" ]]; then
+            plan_args+=(--remote-tag-exists)
+            if [[ -n "${remote_tag_commit}" ]]; then
+              plan_args+=(--remote-tag-commit "${remote_tag_commit}")
+            fi
+          fi
+          if [[ "${release_exists}" == "true" ]]; then
+            plan_args+=(--release-exists)
+          fi
+          if [[ "${release_is_prerelease}" == "true" ]]; then
+            plan_args+=(--release-is-prerelease)
+          fi
+          if [[ "${release_is_latest}" == "true" ]]; then
+            plan_args+=(--release-is-latest)
+          fi
+
+          plan_json="$(python3 scripts/spm_release.py "${plan_args[@]}")"
+          mode="$(printf '%s' "${plan_json}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])')"
+          missing_assets="$(
+            printf '%s' "${plan_json}" \
+              | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["missing_assets"]))'
+          )"
+          metadata_needs_repair="$(
+            printf '%s' "${plan_json}" \
+              | python3 -c 'import json,sys; print(str(json.load(sys.stdin)["metadata_needs_repair"]).lower())'
+          )"
+          final_package_tag="$(
+            printf '%s' "${plan_json}" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["final_package_tag"])'
+          )"
 
           if [[ "${selection_mode}" == "latest" ]]; then
             summary_line="Automated ${release_channel} mergeable binary release ${final_package_tag} for upstream libwebp ${upstream_tag}."
