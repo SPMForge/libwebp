@@ -20,28 +20,28 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "WebP",
-            url: "https://github.com/SPMForge/libwebp/releases/download/v1.6.0-alpha.10/WebP-v1.6.0-alpha.10.xcframework.zip",
-            checksum: "60c348643ee717b54142dffc3a630eff88039badc3534a8b594a1414643c05c1"
+            url: "https://github.com/SPMForge/libwebp/releases/download/v1.6.0-alpha.11/WebP-v1.6.0-alpha.11.xcframework.zip",
+            checksum: "9f7017b71ea91750b8e8272f7132bea35a8a5fc9b22c83e2842c496ef228a904"
         ),
         .binaryTarget(
             name: "WebPDecoder",
-            url: "https://github.com/SPMForge/libwebp/releases/download/v1.6.0-alpha.10/WebPDecoder-v1.6.0-alpha.10.xcframework.zip",
-            checksum: "65a2d83acfcede1aa95bbb03201a18e0e50cf993f961411beade1533ab4f9c99"
+            url: "https://github.com/SPMForge/libwebp/releases/download/v1.6.0-alpha.11/WebPDecoder-v1.6.0-alpha.11.xcframework.zip",
+            checksum: "dd63d56fa6bc1a356c89707899841ec52148968913d61d403c9d019eef637678"
         ),
         .binaryTarget(
             name: "WebPDemux",
-            url: "https://github.com/SPMForge/libwebp/releases/download/v1.6.0-alpha.10/WebPDemux-v1.6.0-alpha.10.xcframework.zip",
-            checksum: "638d61cf621a0cea363a6087cad1ad9a772a9a20f67cb7e520d79eab37bf1e7a"
+            url: "https://github.com/SPMForge/libwebp/releases/download/v1.6.0-alpha.11/WebPDemux-v1.6.0-alpha.11.xcframework.zip",
+            checksum: "ba7cba88978c3152b47f1426491fe4787dba111237c8e2bbfc95533206ed54ee"
         ),
         .binaryTarget(
             name: "WebPMux",
-            url: "https://github.com/SPMForge/libwebp/releases/download/v1.6.0-alpha.10/WebPMux-v1.6.0-alpha.10.xcframework.zip",
-            checksum: "a819c5a54c3341e4846b73063955a4c1aedd792d813a084b0c7cae68cbcd0e95"
+            url: "https://github.com/SPMForge/libwebp/releases/download/v1.6.0-alpha.11/WebPMux-v1.6.0-alpha.11.xcframework.zip",
+            checksum: "7ef0ca3de294bf2387959cd9a79300e299239a710aee7a6f428b83a220475e1d"
         ),
         .binaryTarget(
             name: "SharpYuv",
-            url: "https://github.com/SPMForge/libwebp/releases/download/v1.6.0-alpha.10/SharpYuv-v1.6.0-alpha.10.xcframework.zip",
-            checksum: "7ebd24d2eef9f8be85177c4c3b53fead3304e8b3d22a81e6907fe58d2e1ac1f2"
+            url: "https://github.com/SPMForge/libwebp/releases/download/v1.6.0-alpha.11/SharpYuv-v1.6.0-alpha.11.xcframework.zip",
+            checksum: "8025e1b5424d17eccc57c9274ec05bc73ef9a34340d11e299a549bb64c65a4f2"
         )
     ]
 )
