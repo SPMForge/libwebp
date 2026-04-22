@@ -28,7 +28,8 @@ VALIDATE_WORKFLOW_PATH = (
     REPO_ROOT / ".github" / "workflows" / "validate-apple-release-pipeline.yml"
 )
 UPSTREAM_TAG = "v1.6.0"
-PACKAGE_TAG = "v1.6.0-alpha.1"
+STABLE_PACKAGE_TAG = "1.6.0"
+PACKAGE_TAG = "1.6.0-alpha.1"
 
 
 def load_spm_release_module():
@@ -78,7 +79,7 @@ class PackageReleaseTagTests(unittest.TestCase):
 
         self.assertEqual(
             module.package_release_tag_for_upstream_tag(UPSTREAM_TAG, channel="stable"),
-            UPSTREAM_TAG,
+            STABLE_PACKAGE_TAG,
         )
 
     def test_package_release_tag_for_upstream_tag_accepts_explicit_sequence(self):
@@ -86,7 +87,7 @@ class PackageReleaseTagTests(unittest.TestCase):
 
         self.assertEqual(
             module.package_release_tag_for_upstream_tag(UPSTREAM_TAG, sequence=3),
-            "v1.6.0-alpha.3",
+            "1.6.0-alpha.3",
         )
 
     def test_latest_package_release_tag_for_upstream_tag_ignores_other_channels(self):
@@ -95,26 +96,26 @@ class PackageReleaseTagTests(unittest.TestCase):
         latest = module.latest_package_release_tag_for_upstream_tag(
             UPSTREAM_TAG,
             [
-                "v1.6.0-alpha.1",
-                "v1.6.0-alpha.3",
+                "1.6.0-alpha.1",
+                "1.6.0-alpha.3",
                 "v1.6.0-rc1",
                 "v1.6.0",
-                "v1.5.9-alpha.9",
-                "v1.6.0-alpha.2",
+                "1.5.9-alpha.9",
+                "1.6.0-alpha.2",
             ],
         )
 
-        self.assertEqual(latest, "v1.6.0-alpha.3")
+        self.assertEqual(latest, "1.6.0-alpha.3")
 
     def test_next_package_release_tag_for_upstream_tag_increments_existing_sequence(self):
         module = load_spm_release_module()
 
         next_tag = module.next_package_release_tag_for_upstream_tag(
             UPSTREAM_TAG,
-            ["v1.6.0-alpha.2", "v1.6.0-alpha.7"],
+            ["1.6.0-alpha.2", "1.6.0-alpha.7"],
         )
 
-        self.assertEqual(next_tag, "v1.6.0-alpha.8")
+        self.assertEqual(next_tag, "1.6.0-alpha.8")
 
     def test_require_package_release_tag_rejects_upstream_stable_tag(self):
         module = load_spm_release_module()
@@ -125,7 +126,10 @@ class PackageReleaseTagTests(unittest.TestCase):
     def test_require_package_distribution_tag_accepts_stable_tag(self):
         module = load_spm_release_module()
 
-        self.assertEqual(module.require_package_distribution_tag(UPSTREAM_TAG), UPSTREAM_TAG)
+        self.assertEqual(
+            module.require_package_distribution_tag(STABLE_PACKAGE_TAG),
+            STABLE_PACKAGE_TAG,
+        )
 
 
 class ReleaseArtifactTests(unittest.TestCase):
@@ -138,28 +142,28 @@ class ReleaseArtifactTests(unittest.TestCase):
         self.assertEqual(
             artifact_names,
             [
-                "WebP-v1.6.0-alpha.1.xcframework.zip",
-                "WebPDecoder-v1.6.0-alpha.1.xcframework.zip",
-                "WebPDemux-v1.6.0-alpha.1.xcframework.zip",
-                "WebPMux-v1.6.0-alpha.1.xcframework.zip",
-                "SharpYuv-v1.6.0-alpha.1.xcframework.zip",
+                "WebP-1.6.0-alpha.1.xcframework.zip",
+                "WebPDecoder-1.6.0-alpha.1.xcframework.zip",
+                "WebPDemux-1.6.0-alpha.1.xcframework.zip",
+                "WebPMux-1.6.0-alpha.1.xcframework.zip",
+                "SharpYuv-1.6.0-alpha.1.xcframework.zip",
             ],
         )
 
     def test_release_artifacts_support_stable_package_tags(self):
         module = load_spm_release_module()
 
-        artifacts = module.release_artifacts_for_tag(UPSTREAM_TAG)
+        artifacts = module.release_artifacts_for_tag(STABLE_PACKAGE_TAG)
         artifact_names = [artifact.archive_name for artifact in artifacts]
 
         self.assertEqual(
             artifact_names,
             [
-                "WebP-v1.6.0.xcframework.zip",
-                "WebPDecoder-v1.6.0.xcframework.zip",
-                "WebPDemux-v1.6.0.xcframework.zip",
-                "WebPMux-v1.6.0.xcframework.zip",
-                "SharpYuv-v1.6.0.xcframework.zip",
+                "WebP-1.6.0.xcframework.zip",
+                "WebPDecoder-1.6.0.xcframework.zip",
+                "WebPDemux-1.6.0.xcframework.zip",
+                "WebPMux-1.6.0.xcframework.zip",
+                "SharpYuv-1.6.0.xcframework.zip",
             ],
         )
 
@@ -191,12 +195,12 @@ class ReleaseArtifactTests(unittest.TestCase):
             retagged_paths = module.retag_release_archives(
                 archives_dir,
                 source_tag=PACKAGE_TAG,
-                destination_tag="v1.6.0-alpha.2",
+                destination_tag="1.6.0-alpha.2",
             )
 
             self.assertEqual(len(retagged_paths), len(module.ARTIFACT_DEFINITIONS))
-            self.assertFalse((archives_dir / "WebP-v1.6.0-alpha.1.xcframework.zip").exists())
-            self.assertTrue((archives_dir / "WebP-v1.6.0-alpha.2.xcframework.zip").exists())
+            self.assertFalse((archives_dir / "WebP-1.6.0-alpha.1.xcframework.zip").exists())
+            self.assertTrue((archives_dir / "WebP-1.6.0-alpha.2.xcframework.zip").exists())
 
     def test_artifact_definitions_capture_direct_linked_binary_dependencies(self):
         module = load_spm_release_module()
@@ -311,7 +315,7 @@ class ReleaseArtifactTests(unittest.TestCase):
         )
         self.assertIn('name: "libwebp"', package_swift)
         self.assertIn(
-            'url: "https://github.com/RbBtSn0w/spm-libwebp/releases/download/v1.6.0-alpha.1/WebP-v1.6.0-alpha.1.xcframework.zip"',
+            'url: "https://github.com/RbBtSn0w/spm-libwebp/releases/download/1.6.0-alpha.1/WebP-1.6.0-alpha.1.xcframework.zip"',
             package_swift,
         )
         self.assertIn('checksum: "' + ("1" * 64) + '"', package_swift)
@@ -340,11 +344,11 @@ class ReleasePublicationPlanTests(unittest.TestCase):
         self.assertEqual(
             module.required_release_asset_names(PACKAGE_TAG),
             (
-                "WebP-v1.6.0-alpha.1.xcframework.zip",
-                "WebPDecoder-v1.6.0-alpha.1.xcframework.zip",
-                "WebPDemux-v1.6.0-alpha.1.xcframework.zip",
-                "WebPMux-v1.6.0-alpha.1.xcframework.zip",
-                "SharpYuv-v1.6.0-alpha.1.xcframework.zip",
+                "WebP-1.6.0-alpha.1.xcframework.zip",
+                "WebPDecoder-1.6.0-alpha.1.xcframework.zip",
+                "WebPDemux-1.6.0-alpha.1.xcframework.zip",
+                "WebPMux-1.6.0-alpha.1.xcframework.zip",
+                "SharpYuv-1.6.0-alpha.1.xcframework.zip",
                 "checksums.json",
             ),
         )
@@ -367,12 +371,12 @@ class ReleasePublicationPlanTests(unittest.TestCase):
         plan = module.plan_release_publication(
             tag=PACKAGE_TAG,
             remote_tag_exists=True,
-            release_asset_names=("WebP-v1.6.0-alpha.1.xcframework.zip",),
+            release_asset_names=("WebP-1.6.0-alpha.1.xcframework.zip",),
         )
 
         self.assertEqual(plan.mode, "repair")
         self.assertIn("checksums.json", plan.missing_assets)
-        self.assertIn("SharpYuv-v1.6.0-alpha.1.xcframework.zip", plan.missing_assets)
+        self.assertIn("SharpYuv-1.6.0-alpha.1.xcframework.zip", plan.missing_assets)
 
     def test_plan_release_publication_uses_skip_mode_when_release_is_complete(self):
         module = load_spm_release_module()
@@ -390,9 +394,9 @@ class ReleasePublicationPlanTests(unittest.TestCase):
     def test_plan_release_publication_supports_stable_tags(self):
         module = load_spm_release_module()
 
-        required_assets = module.required_release_asset_names(UPSTREAM_TAG)
+        required_assets = module.required_release_asset_names(STABLE_PACKAGE_TAG)
         plan = module.plan_release_publication(
-            tag=UPSTREAM_TAG,
+            tag=STABLE_PACKAGE_TAG,
             remote_tag_exists=True,
             release_asset_names=required_assets,
         )
@@ -401,11 +405,11 @@ class ReleasePublicationPlanTests(unittest.TestCase):
         self.assertEqual(
             required_assets,
             (
-                "WebP-v1.6.0.xcframework.zip",
-                "WebPDecoder-v1.6.0.xcframework.zip",
-                "WebPDemux-v1.6.0.xcframework.zip",
-                "WebPMux-v1.6.0.xcframework.zip",
-                "SharpYuv-v1.6.0.xcframework.zip",
+                "WebP-1.6.0.xcframework.zip",
+                "WebPDecoder-1.6.0.xcframework.zip",
+                "WebPDemux-1.6.0.xcframework.zip",
+                "WebPMux-1.6.0.xcframework.zip",
+                "SharpYuv-1.6.0.xcframework.zip",
                 "checksums.json",
             ),
         )
@@ -487,7 +491,7 @@ class KeptXCFrameworkTests(unittest.TestCase):
                 mock.patch.object(
                     module,
                     "zip_xcframeworks",
-                    return_value=[output_dir / "WebP-v1.6.0-alpha.1.xcframework.zip"],
+                    return_value=[output_dir / "WebP-1.6.0-alpha.1.xcframework.zip"],
                 ),
             ):
                 module.build_xcframework_archives(
@@ -1245,6 +1249,10 @@ class WorkflowTopologyTests(unittest.TestCase):
         self.assertIn("path: ${{ github.workspace }}/.ccache", workflow_body)
         self.assertIn("steps.release_tag.outputs.upstream_commit", workflow_body)
         self.assertIn("libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}", workflow_body)
+        self.assertIn(
+            'git ls-remote --tags --refs origin "refs/tags/${stable_package_tag}-alpha.*"',
+            workflow_body,
+        )
         self.assertIn('echo "CCACHE_BASEDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"', workflow_body)
         self.assertNotIn("CCACHE_BASEDIR: ${{ runner.temp }}", workflow_body)
         self.assertIn("ccache --show-stats", workflow_body)
@@ -1285,6 +1293,10 @@ class WorkflowTopologyTests(unittest.TestCase):
         )
         self.assertIn(
             'upstream_tag="$(python3 scripts/spm_release.py latest-fetched-upstream-stable-tag)"',
+            workflow_body,
+        )
+        self.assertIn(
+            'stable_package_tag="$(python3 scripts/spm_release.py package-release-tag --upstream-tag "${upstream_tag}" --channel stable)"',
             workflow_body,
         )
         self.assertIn('upstream_commit="$(git rev-parse "refs/upstream-tags/${upstream_tag}^{commit}")"', workflow_body)
