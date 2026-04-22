@@ -25,7 +25,8 @@ if sys.version_info < (3, 10):
 
 
 STABLE_TAG_PATTERN = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
-PACKAGE_RELEASE_TAG_PATTERN = re.compile(r"^v(\d+)\.(\d+)\.(\d+)-alpha\.(\d+)$")
+PACKAGE_STABLE_TAG_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+PACKAGE_RELEASE_TAG_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)-alpha\.(\d+)$")
 CHECKSUM_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 QUOTED_INCLUDE_PATTERN = re.compile(
     r'^(?P<prefix>\s*#\s*(?:include|import)\s*)"(?P<target>[^"]+)"(?P<suffix>.*)$'
@@ -418,16 +419,16 @@ def require_stable_tag(tag: str) -> tuple[int, int, int]:
 def require_package_release_tag(tag: str) -> tuple[int, int, int, int]:
     match = PACKAGE_RELEASE_TAG_PATTERN.fullmatch(tag)
     if match is None:
-        raise ValueError(f"Expected a package release tag like v1.6.0-alpha.1, got: {tag}")
+        raise ValueError(f"Expected a package release tag like 1.6.0-alpha.1, got: {tag}")
     return tuple(int(component) for component in match.groups())
 
 
 def require_package_distribution_tag(tag: str) -> str:
-    if STABLE_TAG_PATTERN.fullmatch(tag) is not None:
+    if PACKAGE_STABLE_TAG_PATTERN.fullmatch(tag) is not None:
         return tag
     if PACKAGE_RELEASE_TAG_PATTERN.fullmatch(tag) is not None:
         return tag
-    raise ValueError(f"Expected a package tag like v1.6.0 or v1.6.0-alpha.1, got: {tag}")
+    raise ValueError(f"Expected a package tag like 1.6.0 or 1.6.0-alpha.1, got: {tag}")
 
 
 def package_release_tag_for_upstream_tag(
@@ -440,12 +441,12 @@ def package_release_tag_for_upstream_tag(
     if channel == "stable":
         if sequence != 1:
             raise ValueError("Stable package releases do not use a prerelease sequence.")
-        return f"v{major}.{minor}.{patch}"
+        return f"{major}.{minor}.{patch}"
     if channel != "alpha":
         raise ValueError(f"Unsupported release channel: {channel}")
     if sequence < 1:
         raise ValueError(f"Expected alpha release sequence >= 1, got: {sequence}")
-    return f"v{major}.{minor}.{patch}-alpha.{sequence}"
+    return f"{major}.{minor}.{patch}-alpha.{sequence}"
 
 
 def package_release_tags_for_upstream_tag(

@@ -94,10 +94,15 @@ jobs:
           else
             upstream_tag="$(python3 scripts/spm_release.py latest-fetched-upstream-stable-tag)"
           fi
+          stable_package_tag="$(
+            python3 scripts/spm_release.py package-release-tag \
+              --upstream-tag "${upstream_tag}" \
+              --channel stable
+          )"
           upstream_commit="$(git rev-parse "refs/upstream-tags/${upstream_tag}^{commit}")"
           git rev-parse --verify --quiet "refs/upstream-tags/${upstream_tag}^{commit}" >/dev/null
           package_tags_file="${RUNNER_TEMP}/existing-package-tags.txt"
-          git ls-remote --tags --refs origin "refs/tags/${upstream_tag}-alpha.*" \
+          git ls-remote --tags --refs origin "refs/tags/${stable_package_tag}-alpha.*" \
             | awk -F'/' 'NF { print $NF }' > "${package_tags_file}"
 
           package_tag="$(

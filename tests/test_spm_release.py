@@ -1295,10 +1295,10 @@ class WorkflowTopologyTests(unittest.TestCase):
             'upstream_tag="$(python3 scripts/spm_release.py latest-fetched-upstream-stable-tag)"',
             workflow_body,
         )
-        self.assertIn(
-            'stable_package_tag="$(python3 scripts/spm_release.py package-release-tag --upstream-tag "${upstream_tag}" --channel stable)"',
-            workflow_body,
-        )
+        self.assertIn('stable_package_tag="$(', workflow_body)
+        self.assertIn("python3 scripts/spm_release.py package-release-tag \\", workflow_body)
+        self.assertIn('--upstream-tag "${upstream_tag}" \\', workflow_body)
+        self.assertIn("--channel stable", workflow_body)
         self.assertIn('upstream_commit="$(git rev-parse "refs/upstream-tags/${upstream_tag}^{commit}")"', workflow_body)
         self.assertIn("python3 scripts/spm_release.py fetch-upstream-tags --remote upstream", workflow_body)
         self.assertIn("python3 scripts/spm_release.py export-upstream-source", workflow_body)

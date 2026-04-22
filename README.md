@@ -47,8 +47,8 @@ The build matrix covers mergeable slices for:
   package release should stay on the `alpha` channel or publish the stable
   package tag.
 - Package tags: this repository owns the SwiftPM semver tags that clients
-  consume. Stable public releases use `vX.Y.Z`. Alpha package tags such as
-  `vX.Y.Z-alpha.N` remain available for prerelease validation and can increment
+  consume. Stable public releases use `X.Y.Z`. Alpha package tags such as
+  `X.Y.Z-alpha.N` remain available for prerelease validation and can increment
   on the same upstream stable release whenever the packaging pipeline needs
   another prerelease cut.
 - The user-facing publish workflows delegate to a shared
@@ -61,11 +61,11 @@ The build matrix covers mergeable slices for:
   `actions/cache`, scope it by cache schema, runner OS, Xcode version, upstream
   source commit, and repo-local build script inputs, and avoid caching
   `DerivedData` or other opaque Xcode build directories by default.
-- Stable package tags such as `vX.Y.Z` are reserved for the manual workflow.
+- Stable package tags such as `X.Y.Z` are reserved for the manual workflow.
   If a stable tag already exists with different generated package metadata, the
   workflow fails instead of overwriting published public artifacts.
 - During this rollout, a rerun may keep repairing the latest matching
-  `vX.Y.Z-alpha.N` release or mint the next `alpha.N` if the generated package
+  `X.Y.Z-alpha.N` release or mint the next `alpha.N` if the generated package
   payload changed.
 - If the latest alpha tag for an upstream release already matches the generated
   `Package.swift` but the GitHub Release is incomplete, the workflow repairs the
@@ -161,7 +161,7 @@ python3 scripts/spm_release.py export-upstream-source \
 ./scripts/build_apple_xcframeworks.sh \
   --source-dir /tmp/libwebp-source \
   --output-dir /tmp/libwebp-artifacts \
-  --tag v1.6.0-alpha.1 \
+  --tag 1.6.0-alpha.1 \
   --keep-xcframeworks
 ```
 

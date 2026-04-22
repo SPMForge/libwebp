@@ -129,6 +129,11 @@ jobs:
 
           upstream_commit="$(git rev-parse "refs/upstream-tags/${upstream_tag}^{commit}")"
           git rev-parse --verify --quiet "refs/upstream-tags/${upstream_tag}^{commit}" >/dev/null
+          stable_package_tag="$(
+            python3 scripts/spm_release.py package-release-tag \
+              --upstream-tag "${upstream_tag}" \
+              --channel stable
+          )"
 
           latest_package_tag=
           next_package_tag=
@@ -138,7 +143,7 @@ jobs:
 
           if [[ "${release_channel}" == "alpha" ]]; then
             package_tags_file="${RUNNER_TEMP}/existing-package-tags.txt"
-            git ls-remote --tags --refs origin "refs/tags/${upstream_tag}-alpha.*" \
+            git ls-remote --tags --refs origin "refs/tags/${stable_package_tag}-alpha.*" \
               | awk -F'/' 'NF { print $NF }' > "${package_tags_file}"
 
             latest_package_tag="$(
@@ -157,12 +162,12 @@ jobs:
               remote_tag_commit="$(git rev-parse "refs/tags/${latest_package_tag}^{commit}")"
             fi
           else
-            build_tag="${upstream_tag}"
+            build_tag="${stable_package_tag}"
 
-            if git ls-remote --exit-code --tags --refs origin "refs/tags/${upstream_tag}" >/dev/null 2>&1; then
-              git fetch --force origin "refs/tags/${upstream_tag}:refs/tags/${upstream_tag}"
+            if git ls-remote --exit-code --tags --refs origin "refs/tags/${stable_package_tag}" >/dev/null 2>&1; then
+              git fetch --force origin "refs/tags/${stable_package_tag}:refs/tags/${stable_package_tag}"
               remote_tag_exists=true
-              remote_tag_commit="$(git rev-parse "refs/tags/${upstream_tag}^{commit}")"
+              remote_tag_commit="$(git rev-parse "refs/tags/${stable_package_tag}^{commit}")"
             fi
           fi
 
@@ -316,7 +321,7 @@ jobs:
           }
 
           if [[ "${release_channel}" == "stable" ]]; then
-            final_package_tag="${upstream_tag}"
+            final_package_tag="${build_tag}"
             remote_tag_exists="${{ steps.release_tag.outputs.remote_tag_exists }}"
             remote_tag_commit="${{ steps.release_tag.outputs.remote_tag_commit }}"
 
