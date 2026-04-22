@@ -1,9 +1,12 @@
 import importlib.util
 import json
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from unittest import mock
 from pathlib import Path
 
@@ -219,6 +222,68 @@ class ReleaseArtifactTests(unittest.TestCase):
             (),
         )
 
+    def test_zip_xcframeworks_preserves_macos_framework_symlinks(self):
+        module = load_spm_release_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            xcframework_dir = temp_path / "WebP.xcframework"
+            framework_dir = xcframework_dir / "macos-arm64_x86_64" / "WebP.framework"
+            resources_dir = framework_dir / "Versions" / "A" / "Resources"
+            resources_dir.mkdir(parents=True)
+            (resources_dir / "Info.plist").write_text("plist\n", encoding="utf-8")
+            (framework_dir / "Versions" / "Current").symlink_to("A")
+            (framework_dir / "Resources").symlink_to(Path("Versions") / "Current" / "Resources")
+
+            output_dir = temp_path / "artifacts"
+            [archive_path] = module.zip_xcframeworks(
+                PACKAGE_TAG,
+                {"WebP": xcframework_dir},
+                output_dir,
+            )
+
+            with zipfile.ZipFile(archive_path) as archive:
+                entries = {info.filename: info for info in archive.infolist()}
+
+            current_info = entries[
+                "WebP.xcframework/macos-arm64_x86_64/WebP.framework/Versions/Current"
+            ]
+            resources_info = entries[
+                "WebP.xcframework/macos-arm64_x86_64/WebP.framework/Resources"
+            ]
+            self.assertTrue(stat.S_ISLNK(current_info.external_attr >> 16))
+            self.assertTrue(stat.S_ISLNK(resources_info.external_attr >> 16))
+
+            if shutil.which("ditto") is not None:
+                extracted_root = temp_path / "extracted"
+                extracted_root.mkdir()
+                subprocess.run(
+                    ["ditto", "-x", "-k", str(archive_path), str(extracted_root)],
+                    check=True,
+                )
+                current_link = (
+                    extracted_root
+                    / "WebP.xcframework"
+                    / "macos-arm64_x86_64"
+                    / "WebP.framework"
+                    / "Versions"
+                    / "Current"
+                )
+                resources_link = (
+                    extracted_root
+                    / "WebP.xcframework"
+                    / "macos-arm64_x86_64"
+                    / "WebP.framework"
+                    / "Resources"
+                )
+                self.assertTrue(current_link.is_symlink())
+                self.assertEqual(current_link.readlink(), Path("A"))
+                self.assertTrue(resources_link.is_symlink())
+                self.assertEqual(
+                    resources_link.readlink(),
+                    Path("Versions") / "Current" / "Resources",
+                )
+
     def test_render_package_swift_uses_release_asset_download_urls(self):
         module = load_spm_release_module()
 
@@ -377,6 +442,73 @@ class ReleaseCommandTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0)
             self.assertRegex(result.stderr, "Checksum JSON must be an object")
+
+
+class KeptXCFrameworkTests(unittest.TestCase):
+    def test_build_xcframework_archives_keeps_symlinks_when_copying_unzipped_outputs(self):
+        module = load_spm_release_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            source_dir = temp_path / "source"
+            output_dir = temp_path / "output"
+            working_dir = temp_path / "work"
+            source_dir.mkdir()
+            output_dir.mkdir()
+
+            kept_framework = (
+                working_dir
+                / "xcframeworks"
+                / "WebP.xcframework"
+                / "macos-arm64_x86_64"
+                / "WebP.framework"
+            )
+            (kept_framework / "Versions" / "A" / "Resources").mkdir(parents=True)
+            (kept_framework / "Versions" / "A" / "Resources" / "Info.plist").write_text(
+                "plist\n",
+                encoding="utf-8",
+            )
+            (kept_framework / "Versions" / "Current").symlink_to("A")
+            (kept_framework / "Resources").symlink_to(Path("Versions") / "Current" / "Resources")
+
+            with (
+                mock.patch.object(module, "ensure_build_prerequisites"),
+                mock.patch.object(module, "copy_source_tree", return_value=source_dir),
+                mock.patch.object(module, "ensure_source_tree_is_buildable"),
+                mock.patch.object(module, "prepare_header_directories", return_value={}),
+                mock.patch.object(module, "build_archived_libraries", return_value={}),
+                mock.patch.object(
+                    module,
+                    "create_xcframeworks",
+                    return_value={"WebP": kept_framework.parents[1]},
+                ),
+                mock.patch.object(module, "validate_xcframeworks"),
+                mock.patch.object(module, "verify_consumer_fixture"),
+                mock.patch.object(
+                    module,
+                    "zip_xcframeworks",
+                    return_value=[output_dir / "WebP-v1.6.0-alpha.1.xcframework.zip"],
+                ),
+            ):
+                module.build_xcframework_archives(
+                    source_dir=source_dir,
+                    output_dir=output_dir,
+                    tag=PACKAGE_TAG,
+                    working_dir=working_dir,
+                    keep_xcframeworks=True,
+                )
+
+            copied_link = (
+                output_dir
+                / "xcframeworks"
+                / "WebP.xcframework"
+                / "macos-arm64_x86_64"
+                / "WebP.framework"
+                / "Versions"
+                / "Current"
+            )
+            self.assertTrue(copied_link.is_symlink())
+            self.assertEqual(copied_link.readlink(), Path("A"))
 
 
 class SourceTreeTests(unittest.TestCase):

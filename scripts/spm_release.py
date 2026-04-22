@@ -9,6 +9,7 @@ import os
 import plistlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1867,6 +1868,35 @@ def verify_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -> No
     verify_spm_consumer_fixture(xcframeworks, work_dir)
 
 
+def write_zip_entry(archive: zipfile.ZipFile, source_path: Path, *, archive_root_parent: Path) -> None:
+    archive_name = source_path.relative_to(archive_root_parent).as_posix()
+
+    if source_path.is_symlink():
+        symlink_entry = zipfile.ZipInfo(archive_name)
+        symlink_entry.create_system = 3
+        symlink_entry.compress_type = zipfile.ZIP_DEFLATED
+        symlink_entry.external_attr = (stat.S_IFLNK | 0o777) << 16
+        archive.writestr(symlink_entry, os.readlink(source_path))
+        return
+
+    if source_path.is_dir():
+        directory_name = archive_name.rstrip("/") + "/"
+        directory_entry = zipfile.ZipInfo(directory_name)
+        directory_entry.create_system = 3
+        directory_entry.compress_type = zipfile.ZIP_DEFLATED
+        directory_entry.external_attr = (stat.S_IFDIR | 0o755) << 16 | 0x10
+        archive.writestr(directory_entry, b"")
+        return
+
+    archive.write(source_path, archive_name)
+
+
+def write_directory_tree_to_zip(archive: zipfile.ZipFile, root_dir: Path) -> None:
+    write_zip_entry(archive, root_dir, archive_root_parent=root_dir.parent)
+    for file_path in sorted(root_dir.rglob("*"), key=lambda path: path.as_posix()):
+        write_zip_entry(archive, file_path, archive_root_parent=root_dir.parent)
+
+
 def zip_xcframeworks(tag: str, xcframeworks: dict[str, Path], output_dir: Path) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     artifact_paths: list[Path] = []
@@ -1878,8 +1908,7 @@ def zip_xcframeworks(tag: str, xcframeworks: dict[str, Path], output_dir: Path) 
         if archive_path.exists():
             archive_path.unlink()
         with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for file_path in sorted(xcframework_dir.rglob("*")):
-                archive.write(file_path, file_path.relative_to(xcframework_dir.parent))
+            write_directory_tree_to_zip(archive, xcframework_dir)
         artifact_paths.append(archive_path)
 
     return artifact_paths
@@ -1956,7 +1985,7 @@ def build_xcframework_archives(
             kept_dir = output_dir / "xcframeworks"
             if kept_dir.exists():
                 shutil.rmtree(kept_dir)
-            shutil.copytree(xcframework_root, kept_dir)
+            shutil.copytree(xcframework_root, kept_dir, symlinks=True)
 
         return artifact_paths
     finally:
