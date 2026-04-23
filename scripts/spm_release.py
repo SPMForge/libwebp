@@ -67,6 +67,7 @@ QUOTED_INCLUDE_PATTERN = re.compile(
 )
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ACQUISITION_CONFIG_PATH = REPO_ROOT / "config" / "source-acquisition.json"
+GITHUB_NOT_FOUND_MARKERS = ("HTTP 404", "not found")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -80,6 +81,30 @@ class SourceAcquisitionConfig:
     def upstream_ref_for_tag(self, tag: str) -> str:
         require_stable_tag(tag)
         return f"{self.upstream_tag_namespace}/{tag}"
+
+
+@dataclasses.dataclass(frozen=True)
+class GitHubReleaseState:
+    release_exists: bool
+    release_is_prerelease: bool
+    release_is_latest: bool
+    release_asset_names: tuple[str, ...]
+    release_id: int | None
+
+
+@dataclasses.dataclass(frozen=True)
+class PreparedReleasePublication:
+    final_package_tag: str
+    mode: str
+    required_assets: tuple[str, ...]
+    missing_assets: tuple[str, ...]
+    metadata_needs_repair: bool
+    release_exists: bool
+    remote_tag_exists: bool
+    remote_tag_commit: str | None
+    release_id: int | None
+    release_is_prerelease: bool
+    release_is_latest: bool
 
 
 def load_source_acquisition_config(path: Path = SOURCE_ACQUISITION_CONFIG_PATH) -> SourceAcquisitionConfig:
@@ -1280,6 +1305,314 @@ def write_json(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def command_output_allowing_not_found(
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    not_found_markers: tuple[str, ...] = GITHUB_NOT_FOUND_MARKERS,
+) -> str | None:
+    result = subprocess.run(
+        args,
+        cwd=str(cwd) if cwd is not None else None,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return result.stdout.strip()
+
+    stdout = result.stdout.strip() if result.stdout else ""
+    stderr = result.stderr.strip() if result.stderr else ""
+    details = "\n".join(segment for segment in (stdout, stderr) if segment)
+    normalized_details = details.lower()
+    if any(marker.lower() in normalized_details for marker in not_found_markers):
+        return None
+    raise RuntimeError(
+        f"GitHub CLI command failed with exit code {result.returncode}: {' '.join(args)}"
+        + (f"\n{details}" if details else "")
+    )
+
+
+def github_api_json_allowing_not_found(endpoint: str) -> dict[str, object] | None:
+    output = command_output_allowing_not_found(["gh", "api", endpoint])
+    if output is None:
+        return None
+    payload = json.loads(output)
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Expected a JSON object from gh api {endpoint}, got: {type(payload).__name__}")
+    return payload
+
+
+def inspect_github_release_state(*, repository: str, tag: str) -> GitHubReleaseState:
+    release_payload = github_api_json_allowing_not_found(f"repos/{repository}/releases/tags/{tag}")
+    if release_payload is None:
+        return GitHubReleaseState(
+            release_exists=False,
+            release_is_prerelease=False,
+            release_is_latest=False,
+            release_asset_names=(),
+            release_id=None,
+        )
+
+    release_id = release_payload.get("id")
+    if not isinstance(release_id, int):
+        raise RuntimeError(f"GitHub release payload for {tag} is missing integer id.")
+    release_is_prerelease = release_payload.get("prerelease")
+    if not isinstance(release_is_prerelease, bool):
+        raise RuntimeError(f"GitHub release payload for {tag} is missing boolean prerelease state.")
+    release_assets = release_payload.get("assets")
+    if not isinstance(release_assets, list):
+        raise RuntimeError(f"GitHub release payload for {tag} is missing an assets list.")
+
+    release_asset_names: list[str] = []
+    for asset in release_assets:
+        if not isinstance(asset, dict) or not isinstance(asset.get("name"), str):
+            raise RuntimeError(f"GitHub release payload for {tag} contains an invalid asset entry.")
+        release_asset_names.append(asset["name"])
+
+    latest_payload = github_api_json_allowing_not_found(f"repos/{repository}/releases/latest")
+    release_is_latest = False
+    if latest_payload is not None:
+        latest_tag = latest_payload.get("tag_name")
+        if not isinstance(latest_tag, str):
+            raise RuntimeError("GitHub latest release payload is missing tag_name.")
+        release_is_latest = latest_tag == tag
+
+    return GitHubReleaseState(
+        release_exists=True,
+        release_is_prerelease=release_is_prerelease,
+        release_is_latest=release_is_latest,
+        release_asset_names=tuple(release_asset_names),
+        release_id=release_id,
+    )
+
+
+def read_optional_git_file(ref: str, relative_path: str) -> str | None:
+    result = subprocess.run(
+        ["git", "show", f"{ref}:{relative_path}"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return result.stdout
+    return None
+
+
+def render_and_validate_package_manifest(
+    *,
+    owner: str,
+    repository: str,
+    tag: str,
+    checksums_json_path: Path,
+    metadata_dir: Path,
+    validation_dir: Path,
+) -> str:
+    checksums = validate_checksums_payload(json.loads(checksums_json_path.read_text(encoding="utf-8")))
+    package_swift = render_package_swift(
+        owner=owner,
+        repository=repository,
+        tag=tag,
+        checksums=checksums,
+    )
+    package_swift_path = metadata_dir / "Package.swift"
+    package_swift_path.parent.mkdir(parents=True, exist_ok=True)
+    package_swift_path.write_text(package_swift, encoding="utf-8")
+
+    validation_dir.mkdir(parents=True, exist_ok=True)
+    (validation_dir / "Package.swift").write_text(package_swift, encoding="utf-8")
+    run_command(["swift", "package", "dump-package", "--package-path", str(validation_dir)])
+    return package_swift
+
+
+def write_release_notes(
+    metadata_dir: Path,
+    *,
+    selection_mode: str,
+    release_channel: str,
+    final_package_tag: str,
+    upstream_tag: str,
+    upstream_commit: str,
+) -> Path:
+    if selection_mode == "latest":
+        summary_line = (
+            f"Automated {release_channel} mergeable binary release {final_package_tag} "
+            f"for upstream libwebp {upstream_tag}."
+        )
+    else:
+        summary_line = (
+            f"Manual {release_channel} mergeable binary release {final_package_tag} "
+            f"for upstream libwebp {upstream_tag}."
+        )
+
+    release_notes_path = metadata_dir / "release-notes.md"
+    release_notes_path.write_text(
+        "\n".join(
+            [
+                summary_line,
+                "",
+                f"Upstream source commit: {upstream_commit}",
+                "",
+                "Published artifacts:",
+                "- Mergeable WebP.xcframework.zip",
+                "- Mergeable WebPDecoder.xcframework.zip",
+                "- Mergeable WebPDemux.xcframework.zip",
+                "- Mergeable WebPMux.xcframework.zip",
+                "- Mergeable SharpYuv.xcframework.zip",
+                "- checksums.json",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return release_notes_path
+
+
+def prepare_release_publication(
+    *,
+    selection_mode: str,
+    release_channel: str,
+    upstream_tag: str,
+    upstream_commit: str,
+    build_tag: str,
+    latest_package_tag: str | None,
+    next_package_tag: str | None,
+    remote_tag_exists: bool,
+    remote_tag_commit: str | None,
+    artifacts_dir: Path,
+    metadata_dir: Path,
+    validation_dir: Path,
+    package_owner: str,
+    package_repository: str,
+    github_repository: str,
+) -> PreparedReleasePublication:
+    if selection_mode not in {"latest", "requested"}:
+        raise ValueError(f"Unsupported selection_mode: {selection_mode}")
+    if release_channel not in {"alpha", "stable"}:
+        raise ValueError(f"Unsupported release_channel: {release_channel}")
+    if remote_tag_exists and not remote_tag_commit:
+        raise ValueError("remote_tag_commit is required when remote_tag_exists is true.")
+
+    checksums_json_path = metadata_dir / "checksums.json"
+    if not checksums_json_path.exists():
+        raise RuntimeError(f"Missing checksums payload: {checksums_json_path}")
+
+    final_package_tag = build_tag
+    final_remote_tag_exists = remote_tag_exists
+    final_remote_tag_commit = remote_tag_commit
+    rendered_package_swift = render_and_validate_package_manifest(
+        owner=package_owner,
+        repository=package_repository,
+        tag=build_tag,
+        checksums_json_path=checksums_json_path,
+        metadata_dir=metadata_dir,
+        validation_dir=validation_dir,
+    )
+    candidate_package_swift: str | None = None
+
+    if release_channel == "stable":
+        if final_remote_tag_exists:
+            candidate_package_swift = read_optional_git_file(f"refs/tags/{final_package_tag}", "Package.swift")
+            if candidate_package_swift is None:
+                raise RuntimeError(
+                    f"Stable package tag {final_package_tag} already exists without Package.swift; "
+                    "refusing to overwrite it."
+                )
+    else:
+        if latest_package_tag:
+            latest_package_swift = read_optional_git_file(f"refs/tags/{latest_package_tag}", "Package.swift")
+            if latest_package_swift is not None and latest_package_swift == rendered_package_swift:
+                if not final_remote_tag_exists or not final_remote_tag_commit:
+                    raise ValueError(
+                        "latest_package_tag matched the rendered package, but the remote tag state is incomplete."
+                    )
+                final_package_tag = latest_package_tag
+                candidate_package_swift = latest_package_swift
+            else:
+                if not next_package_tag:
+                    raise ValueError(
+                        "next_package_tag is required when the latest alpha tag does not match the rendered package."
+                    )
+                final_package_tag = next_package_tag
+                final_remote_tag_exists = False
+                final_remote_tag_commit = None
+
+        if final_package_tag != build_tag:
+            retag_release_archives(
+                artifacts_dir,
+                source_tag=build_tag,
+                destination_tag=final_package_tag,
+            )
+            rendered_package_swift = render_and_validate_package_manifest(
+                owner=package_owner,
+                repository=package_repository,
+                tag=final_package_tag,
+                checksums_json_path=checksums_json_path,
+                metadata_dir=metadata_dir,
+                validation_dir=validation_dir,
+            )
+
+    if final_remote_tag_exists and not final_remote_tag_commit:
+        raise ValueError("remote_tag_commit is required for an existing final package tag.")
+
+    release_state = GitHubReleaseState(
+        release_exists=False,
+        release_is_prerelease=False,
+        release_is_latest=False,
+        release_asset_names=(),
+        release_id=None,
+    )
+    if final_remote_tag_exists:
+        release_state = inspect_github_release_state(
+            repository=github_repository,
+            tag=final_package_tag,
+        )
+
+    resolution = resolve_release_publication(
+        release_channel=release_channel,
+        build_tag=final_package_tag,
+        latest_package_tag=None,
+        rendered_package_swift=rendered_package_swift,
+        candidate_package_swift=candidate_package_swift,
+        release_asset_names=release_state.release_asset_names,
+        release_exists=release_state.release_exists,
+        release_is_prerelease=release_state.release_is_prerelease,
+        release_is_latest=release_state.release_is_latest,
+        remote_tag_exists=final_remote_tag_exists,
+        remote_tag_commit=final_remote_tag_commit,
+    )
+
+    write_release_notes(
+        metadata_dir,
+        selection_mode=selection_mode,
+        release_channel=release_channel,
+        final_package_tag=resolution.final_package_tag,
+        upstream_tag=upstream_tag,
+        upstream_commit=upstream_commit,
+    )
+
+    return PreparedReleasePublication(
+        final_package_tag=resolution.final_package_tag,
+        mode=resolution.mode,
+        required_assets=resolution.required_assets,
+        missing_assets=resolution.missing_assets,
+        metadata_needs_repair=resolution.metadata_needs_repair,
+        release_exists=resolution.release_exists,
+        remote_tag_exists=resolution.remote_tag_exists,
+        remote_tag_commit=resolution.remote_tag_commit,
+        release_id=release_state.release_id,
+        release_is_prerelease=release_state.release_is_prerelease,
+        release_is_latest=release_state.release_is_latest,
+    )
+
+
+def write_github_outputs(path: Path, outputs: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for key, value in outputs.items():
+            handle.write(f"{key}={value}\n")
+
+
 def command_latest_stable_tag(args: argparse.Namespace) -> int:
     print(select_latest_stable_tag(read_tags_from_cli_or_stdin(args.tags)))
     return 0
@@ -1382,6 +1715,41 @@ def command_resolve_release_publication(args: argparse.Namespace) -> int:
         remote_tag_exists=args.remote_tag_exists,
         remote_tag_commit=args.remote_tag_commit or None,
     )
+    print(json.dumps(dataclasses.asdict(resolution), indent=2))
+    return 0
+
+
+def command_prepare_release_publication(args: argparse.Namespace) -> int:
+    resolution = prepare_release_publication(
+        selection_mode=args.selection_mode,
+        release_channel=args.release_channel,
+        upstream_tag=args.upstream_tag,
+        upstream_commit=args.upstream_commit,
+        build_tag=args.build_tag,
+        latest_package_tag=args.latest_package_tag or None,
+        next_package_tag=args.next_package_tag or None,
+        remote_tag_exists=args.remote_tag_exists,
+        remote_tag_commit=args.remote_tag_commit or None,
+        artifacts_dir=Path(args.artifacts_dir),
+        metadata_dir=Path(args.metadata_dir),
+        validation_dir=Path(args.validation_dir),
+        package_owner=args.package_owner,
+        package_repository=args.package_repository,
+        github_repository=args.github_repository,
+    )
+    if args.github_output:
+        write_github_outputs(
+            Path(args.github_output),
+            {
+                "package_tag": resolution.final_package_tag,
+                "mode": resolution.mode,
+                "release_exists": str(resolution.release_exists).lower(),
+                "remote_tag_exists": str(resolution.remote_tag_exists).lower(),
+                "remote_tag_commit": resolution.remote_tag_commit or "",
+                "missing_assets": ",".join(resolution.missing_assets),
+                "metadata_needs_repair": str(resolution.metadata_needs_repair).lower(),
+            },
+        )
     print(json.dumps(dataclasses.asdict(resolution), indent=2))
     return 0
 
@@ -1540,6 +1908,36 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_release_publication_parser.add_argument("--release-is-latest", action="store_true")
     resolve_release_publication_parser.add_argument("--remote-tag-exists", action="store_true")
     resolve_release_publication_parser.set_defaults(func=command_resolve_release_publication)
+
+    prepare_release_publication_parser = subparsers.add_parser(
+        "prepare-release-publication",
+        help="Render the final Package.swift, inspect GitHub release state, and emit publication outputs.",
+    )
+    prepare_release_publication_parser.add_argument(
+        "--selection-mode",
+        choices=("latest", "requested"),
+        required=True,
+    )
+    prepare_release_publication_parser.add_argument(
+        "--release-channel",
+        choices=("alpha", "stable"),
+        required=True,
+    )
+    prepare_release_publication_parser.add_argument("--upstream-tag", required=True)
+    prepare_release_publication_parser.add_argument("--upstream-commit", required=True)
+    prepare_release_publication_parser.add_argument("--build-tag", required=True)
+    prepare_release_publication_parser.add_argument("--latest-package-tag", default="")
+    prepare_release_publication_parser.add_argument("--next-package-tag", default="")
+    prepare_release_publication_parser.add_argument("--remote-tag-commit", default="")
+    prepare_release_publication_parser.add_argument("--artifacts-dir", required=True)
+    prepare_release_publication_parser.add_argument("--metadata-dir", required=True)
+    prepare_release_publication_parser.add_argument("--validation-dir", required=True)
+    prepare_release_publication_parser.add_argument("--package-owner", required=True)
+    prepare_release_publication_parser.add_argument("--package-repository", required=True)
+    prepare_release_publication_parser.add_argument("--github-repository", required=True)
+    prepare_release_publication_parser.add_argument("--github-output", default="")
+    prepare_release_publication_parser.add_argument("--remote-tag-exists", action="store_true")
+    prepare_release_publication_parser.set_defaults(func=command_prepare_release_publication)
 
     build_plan_parser = subparsers.add_parser(
         "print-build-plan",

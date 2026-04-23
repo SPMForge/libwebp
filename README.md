@@ -53,7 +53,9 @@ The build matrix covers mergeable slices for:
   another prerelease cut.
 - The user-facing publish workflows delegate to a shared
   `publish-package-release-core` reusable workflow so scheduled and manual
-  release paths stay on the same build, manifest, and publication logic.
+  release paths stay on the same resolve, build, manifest, and publication
+  logic while isolating the expensive XCFramework build from the final publish
+  step.
 - Source acquisition is defined by [`config/source-acquisition.json`](config/source-acquisition.json).
   CI builds from exported upstream tag snapshots instead of assuming the checked-out
   repository state is the release source of truth.

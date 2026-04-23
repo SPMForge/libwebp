@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import json
 import shutil
 import stat
@@ -486,7 +487,184 @@ class ReleasePublicationResolutionTests(unittest.TestCase):
             )
 
 
+class GitHubReleaseStateInspectionTests(unittest.TestCase):
+    def test_inspect_github_release_state_treats_404_as_missing_release(self):
+        module = load_spm_release_module()
+
+        with mock.patch.object(
+            module.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                args=["gh", "api", "repos/SPMForge/libwebp/releases/tags/1.6.0-alpha.1"],
+                returncode=1,
+                stdout="",
+                stderr="gh: HTTP 404: Not Found\n",
+            ),
+        ) as run:
+            state = module.inspect_github_release_state(
+                repository="SPMForge/libwebp",
+                tag=PACKAGE_TAG,
+            )
+
+        self.assertFalse(state.release_exists)
+        self.assertFalse(state.release_is_prerelease)
+        self.assertFalse(state.release_is_latest)
+        self.assertEqual(state.release_asset_names, ())
+        self.assertIsNone(state.release_id)
+        self.assertEqual(run.call_count, 1)
+
+    def test_inspect_github_release_state_fails_loudly_on_non_404_error(self):
+        module = load_spm_release_module()
+
+        with mock.patch.object(
+            module.subprocess,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                args=["gh", "api", "repos/SPMForge/libwebp/releases/tags/1.6.0-alpha.1"],
+                returncode=1,
+                stdout="",
+                stderr="connection reset by peer\n",
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "GitHub CLI command failed"):
+                module.inspect_github_release_state(
+                    repository="SPMForge/libwebp",
+                    tag=PACKAGE_TAG,
+                )
+
+
+class PreparedReleasePublicationTests(unittest.TestCase):
+    def test_prepare_release_publication_requires_commit_for_existing_remote_tag(self):
+        module = load_spm_release_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            with self.assertRaisesRegex(ValueError, "remote_tag_commit is required"):
+                module.prepare_release_publication(
+                    selection_mode="latest",
+                    release_channel="alpha",
+                    upstream_tag=UPSTREAM_TAG,
+                    upstream_commit="deadbeef",
+                    build_tag=PACKAGE_TAG,
+                    latest_package_tag=PACKAGE_TAG,
+                    next_package_tag="1.6.0-alpha.2",
+                    remote_tag_exists=True,
+                    remote_tag_commit=None,
+                    artifacts_dir=temp_path / "artifacts",
+                    metadata_dir=temp_path / "metadata",
+                    validation_dir=temp_path / "validation",
+                    package_owner="SPMForge",
+                    package_repository="libwebp",
+                    github_repository="SPMForge/libwebp",
+                )
+
+    def test_prepare_release_publication_rejects_incomplete_remote_state_for_matching_latest_alpha(self):
+        module = load_spm_release_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            metadata_dir = temp_path / "metadata"
+            metadata_dir.mkdir()
+            (metadata_dir / "checksums.json").write_text("{}", encoding="utf-8")
+
+            with (
+                mock.patch.object(module, "render_and_validate_package_manifest", return_value="package.swift\n"),
+                mock.patch.object(module, "read_optional_git_file", return_value="package.swift\n"),
+            ):
+                with self.assertRaisesRegex(ValueError, "remote tag state is incomplete"):
+                    module.prepare_release_publication(
+                        selection_mode="latest",
+                        release_channel="alpha",
+                        upstream_tag=UPSTREAM_TAG,
+                        upstream_commit="deadbeef",
+                        build_tag=PACKAGE_TAG,
+                        latest_package_tag=PACKAGE_TAG,
+                        next_package_tag="1.6.0-alpha.2",
+                        remote_tag_exists=False,
+                        remote_tag_commit=None,
+                        artifacts_dir=temp_path / "artifacts",
+                        metadata_dir=metadata_dir,
+                        validation_dir=temp_path / "validation",
+                        package_owner="SPMForge",
+                        package_repository="libwebp",
+                        github_repository="SPMForge/libwebp",
+                    )
+
+
 class ReleaseCommandTests(unittest.TestCase):
+    def test_command_prepare_release_publication_writes_github_outputs(self):
+        module = load_spm_release_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            github_output_path = temp_path / "github-output.txt"
+            artifacts_dir = temp_path / "artifacts"
+            metadata_dir = temp_path / "metadata"
+            validation_dir = temp_path / "validation"
+            artifacts_dir.mkdir()
+            metadata_dir.mkdir()
+            validation_dir.mkdir()
+
+            resolution = module.PreparedReleasePublication(
+                final_package_tag=PACKAGE_TAG,
+                mode="repair",
+                required_assets=module.required_release_asset_names(PACKAGE_TAG),
+                missing_assets=("checksums.json",),
+                metadata_needs_repair=True,
+                release_exists=True,
+                remote_tag_exists=True,
+                remote_tag_commit="abc123",
+                release_id=42,
+                release_is_prerelease=False,
+                release_is_latest=True,
+            )
+
+            with mock.patch.object(module, "prepare_release_publication", return_value=resolution):
+                parser = module.build_parser()
+                args = parser.parse_args(
+                    [
+                        "prepare-release-publication",
+                        "--selection-mode",
+                        "latest",
+                        "--release-channel",
+                        "alpha",
+                        "--upstream-tag",
+                        UPSTREAM_TAG,
+                        "--upstream-commit",
+                        "deadbeef",
+                        "--build-tag",
+                        PACKAGE_TAG,
+                        "--artifacts-dir",
+                        str(artifacts_dir),
+                        "--metadata-dir",
+                        str(metadata_dir),
+                        "--validation-dir",
+                        str(validation_dir),
+                        "--package-owner",
+                        "SPMForge",
+                        "--package-repository",
+                        "libwebp",
+                        "--github-repository",
+                        "SPMForge/libwebp",
+                        "--github-output",
+                        str(github_output_path),
+                    ]
+                )
+
+                with mock.patch("sys.stdout", new=io.StringIO()):
+                    result = args.func(args)
+                github_output_body = github_output_path.read_text(encoding="utf-8")
+
+        self.assertEqual(result, 0)
+        self.assertIn("package_tag=1.6.0-alpha.1", github_output_body)
+        self.assertIn("mode=repair", github_output_body)
+        self.assertIn("release_exists=true", github_output_body)
+        self.assertIn("remote_tag_exists=true", github_output_body)
+        self.assertIn("remote_tag_commit=abc123", github_output_body)
+        self.assertIn("missing_assets=checksums.json", github_output_body)
+        self.assertIn("metadata_needs_repair=true", github_output_body)
+
     def test_command_render_package_swift_rejects_non_object_checksum_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -1318,9 +1496,16 @@ class WorkflowTopologyTests(unittest.TestCase):
         self.assertIn("uses: actions/cache/restore@v4", workflow_body)
         self.assertIn("uses: actions/cache/save@v4", workflow_body)
         self.assertIn("path: ${{ github.workspace }}/.ccache", workflow_body)
-        self.assertIn("steps.release_tag.outputs.upstream_commit", workflow_body)
+        self.assertIn("needs.resolve.outputs.upstream_commit", workflow_body)
         self.assertIn("libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}", workflow_body)
         self.assertIn("config/platforms.json", workflow_body)
+        self.assertIn("resolve:", workflow_body)
+        self.assertIn("build:", workflow_body)
+        self.assertIn("publish:", workflow_body)
+        self.assertIn("needs: resolve", workflow_body)
+        self.assertIn("needs: [resolve, build]", workflow_body)
+        self.assertIn("uses: actions/upload-artifact@v4", workflow_body)
+        self.assertIn("uses: actions/download-artifact@v4", workflow_body)
         self.assertIn(
             'git ls-remote --tags --refs origin "refs/tags/${stable_package_tag}-alpha.*"',
             workflow_body,
@@ -1329,9 +1514,8 @@ class WorkflowTopologyTests(unittest.TestCase):
         self.assertNotIn("CCACHE_BASEDIR: ${{ runner.temp }}", workflow_body)
         self.assertIn("ccache --show-stats", workflow_body)
         self.assertIn('--working-dir "${RUNNER_TEMP}/xcframework-build"', workflow_body)
-        self.assertIn("inspect_release_state", workflow_body)
-        self.assertIn("resolve-release-publication", workflow_body)
-        self.assertIn("--release-assets-file", workflow_body)
+        self.assertIn("prepare-release-publication", workflow_body)
+        self.assertIn("--github-output", workflow_body)
         self.assertIn('release_args+=(--prerelease --latest=false)', workflow_body)
         self.assertIn('gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}"', workflow_body)
         self.assertIn("-F make_latest=false", workflow_body)
@@ -1339,6 +1523,7 @@ class WorkflowTopologyTests(unittest.TestCase):
         self.assertIn("-F prerelease=false", workflow_body)
         self.assertNotIn('if [[ "${mode}" == "skip" && "${metadata_needs_repair}" == "true" ]]; then', workflow_body)
         self.assertNotIn("release-publish-plan --tag", workflow_body)
+        self.assertNotIn("inspect_release_state", workflow_body)
         self.assertNotIn("https://github.com/webmproject/libwebp.git", workflow_body)
 
     def test_validate_workflow_checks_rendered_package_contract(self):
