@@ -1853,7 +1853,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("alpha", "stable"),
         default="alpha",
     )
-    package_release_tag_parser.add_argument("--sequence", type=int, default=1)
+    package_release_tag_parser.add_argument("--sequence", type=int)
     package_release_tag_parser.set_defaults(func=command_package_release_tag)
 
     latest_package_release_tag_parser = subparsers.add_parser(

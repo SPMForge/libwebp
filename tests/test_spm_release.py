@@ -91,6 +91,24 @@ class PackageReleaseTagTests(unittest.TestCase):
             "1.6.0-alpha.3",
         )
 
+    def test_package_release_tag_cli_does_not_inject_alpha_sequence_for_stable_channel(self):
+        module = load_spm_release_module()
+
+        stdout = io.StringIO()
+        with mock.patch("sys.stdout", stdout):
+            exit_code = module.main(
+                [
+                    "package-release-tag",
+                    "--upstream-tag",
+                    UPSTREAM_TAG,
+                    "--channel",
+                    "stable",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue().strip(), STABLE_PACKAGE_TAG)
+
     def test_latest_package_release_tag_for_upstream_tag_ignores_other_channels(self):
         module = load_spm_release_module()
 
