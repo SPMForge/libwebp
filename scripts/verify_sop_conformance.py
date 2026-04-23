@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 
@@ -12,6 +13,10 @@ WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise SystemExit(message)
+
+
+def require_regex(pattern: str, text: str, message: str) -> None:
+    require(re.search(pattern, text, re.MULTILINE) is not None, message)
 
 
 def read_text(path: Path) -> str:
@@ -29,19 +34,32 @@ def main() -> int:
     require("shared" in readme and "publish-package-release-core" in readme, "README must describe the shared publish core")
     require("config/platforms.json" in readme, "README must point to config/platforms.json as deployment target source")
     require("workflow_call:" in publish_core, "publish core must be reusable via workflow_call")
+    require('FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"' in publish_core, "publish core must opt into Node 24 action runtime")
     require("--latest=false" in publish_core, "alpha publishes must force latest=false")
     require("resolve:" in publish_core and "build:" in publish_core and "publish:" in publish_core, "publish core must isolate resolve, build, and publish jobs")
     require(
         publish_core.count("python3 scripts/spm_release.py fetch-upstream-tags --remote upstream") >= 2,
         "publish core must fetch upstream tag refs in every job that consumes refs/upstream-tags",
     )
-    require("actions/upload-artifact@v4" in publish_core, "publish core must upload build outputs between jobs")
-    require("actions/download-artifact@v4" in publish_core, "publish core must download build outputs for publish")
+    require_regex(r"actions/checkout@v([6-9]|[1-9][0-9]+)", publish_core, "publish core must use a Node 24-ready checkout action")
+    require_regex(r"actions/setup-python@v([6-9]|[1-9][0-9]+)", publish_core, "publish core must use a Node 24-ready setup-python action")
+    require_regex(r"actions/cache/restore@v([5-9]|[1-9][0-9]+)", publish_core, "publish core must use a Node 24-ready cache restore action")
+    require_regex(r"actions/cache/save@v([5-9]|[1-9][0-9]+)", publish_core, "publish core must use a Node 24-ready cache save action")
+    require_regex(r"actions/upload-artifact@v([6-9]|[1-9][0-9]+)", publish_core, "publish core must upload build outputs with a Node 24-ready artifact action")
+    require_regex(r"actions/download-artifact@v([5-9]|[1-9][0-9]+)", publish_core, "publish core must download build outputs with a Node 24-ready artifact action")
+    require("steps.restore_ccache.outputs.cache-hit != 'true'" in publish_core, "publish core must skip cache save after an exact cache hit")
     require("package-build-bundle-${{ github.run_id }}" in publish_core, "publish core must use a stable build bundle artifact name within a workflow run")
     require("package-build-bundle-${{ github.run_id }}-${{ github.run_attempt }}" not in publish_core, "publish core must not key build bundle artifacts on run_attempt")
     require("overwrite: true" in publish_core, "publish core must overwrite the stable build bundle artifact when build reruns")
     require("prepare-release-publication" in publish_core, "publish core must delegate publication planning to repo-local Python")
     require("push:" in validate_workflow and "pull_request:" in validate_workflow, "validation workflow must run on push and pull_request")
+    require('FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"' in validate_workflow, "validation workflow must opt into Node 24 action runtime")
+    require_regex(r"actions/checkout@v([6-9]|[1-9][0-9]+)", validate_workflow, "validation workflow must use a Node 24-ready checkout action")
+    require_regex(r"actions/setup-python@v([6-9]|[1-9][0-9]+)", validate_workflow, "validation workflow must use a Node 24-ready setup-python action")
+    require_regex(r"actions/cache/restore@v([5-9]|[1-9][0-9]+)", validate_workflow, "validation workflow must use a Node 24-ready cache restore action")
+    require_regex(r"actions/cache/save@v([5-9]|[1-9][0-9]+)", validate_workflow, "validation workflow must use a Node 24-ready cache save action")
+    require_regex(r"actions/upload-artifact@v([6-9]|[1-9][0-9]+)", validate_workflow, "validation workflow must use a Node 24-ready artifact upload action")
+    require("steps.restore_ccache.outputs.cache-hit != 'true'" in validate_workflow, "validation workflow must skip cache save after an exact cache hit")
     require((REPO_ROOT / "config" / "platforms.json").exists(), "platform contract must exist")
     require((REPO_ROOT / "scripts" / "spm_release_support" / "platform_contract.py").exists(), "platform contract module missing")
     require((REPO_ROOT / "scripts" / "spm_release_support" / "release_planning.py").exists(), "release planning module missing")
