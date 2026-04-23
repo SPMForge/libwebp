@@ -1536,6 +1536,10 @@ class WorkflowTopologyTests(unittest.TestCase):
         self.assertIn("publish:", workflow_body)
         self.assertIn("needs: resolve", workflow_body)
         self.assertIn("needs: [resolve, build]", workflow_body)
+        self.assertEqual(
+            workflow_body.count("python3 scripts/spm_release.py fetch-upstream-tags --remote upstream"),
+            2,
+        )
         self.assertIn("uses: actions/upload-artifact@v4", workflow_body)
         self.assertIn("uses: actions/download-artifact@v4", workflow_body)
         self.assertIn("package-build-bundle-${{ github.run_id }}", workflow_body)

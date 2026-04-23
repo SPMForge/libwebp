@@ -31,6 +31,10 @@ def main() -> int:
     require("workflow_call:" in publish_core, "publish core must be reusable via workflow_call")
     require("--latest=false" in publish_core, "alpha publishes must force latest=false")
     require("resolve:" in publish_core and "build:" in publish_core and "publish:" in publish_core, "publish core must isolate resolve, build, and publish jobs")
+    require(
+        publish_core.count("python3 scripts/spm_release.py fetch-upstream-tags --remote upstream") >= 2,
+        "publish core must fetch upstream tag refs in every job that consumes refs/upstream-tags",
+    )
     require("actions/upload-artifact@v4" in publish_core, "publish core must upload build outputs between jobs")
     require("actions/download-artifact@v4" in publish_core, "publish core must download build outputs for publish")
     require("package-build-bundle-${{ github.run_id }}" in publish_core, "publish core must use a stable build bundle artifact name within a workflow run")
