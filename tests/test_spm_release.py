@@ -1506,6 +1506,9 @@ class WorkflowTopologyTests(unittest.TestCase):
         self.assertIn("needs: [resolve, build]", workflow_body)
         self.assertIn("uses: actions/upload-artifact@v4", workflow_body)
         self.assertIn("uses: actions/download-artifact@v4", workflow_body)
+        self.assertIn("package-build-bundle-${{ github.run_id }}", workflow_body)
+        self.assertIn("overwrite: true", workflow_body)
+        self.assertNotIn("package-build-bundle-${{ github.run_id }}-${{ github.run_attempt }}", workflow_body)
         self.assertIn(
             'git ls-remote --tags --refs origin "refs/tags/${stable_package_tag}-alpha.*"',
             workflow_body,
