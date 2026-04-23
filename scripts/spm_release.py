@@ -1290,7 +1290,7 @@ def compute_checksums_for_archives(archives_dir: Path) -> dict[str, str]:
     archives_dir = archives_dir.resolve()
     checksums: dict[str, str] = {}
     for definition in ARTIFACT_DEFINITIONS:
-        matches = sorted(archives_dir.glob(f"{definition.target_name}-v*.xcframework.zip"))
+        matches = sorted(archives_dir.glob(f"{definition.target_name}-*.xcframework.zip"))
         if len(matches) != 1:
             raise RuntimeError(
                 f"Expected exactly one archive for {definition.target_name} in {archives_dir}, found {len(matches)}"

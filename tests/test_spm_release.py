@@ -228,6 +228,20 @@ class ReleaseArtifactTests(unittest.TestCase):
             self.assertFalse((archives_dir / "WebP-1.6.0-alpha.1.xcframework.zip").exists())
             self.assertTrue((archives_dir / "WebP-1.6.0-alpha.2.xcframework.zip").exists())
 
+    def test_compute_checksums_for_archives_reads_current_versioned_archive_names(self):
+        module = load_spm_release_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archives_dir = Path(temp_dir)
+            for artifact in module.release_artifacts_for_tag(PACKAGE_TAG):
+                (archives_dir / artifact.archive_name).write_text("fixture\n", encoding="utf-8")
+
+            with mock.patch.object(module, "command_output", return_value="c" * 64) as command_output:
+                checksums = module.compute_checksums_for_archives(archives_dir)
+
+        self.assertEqual(set(checksums.keys()), {artifact.target_name for artifact in module.ARTIFACT_DEFINITIONS})
+        self.assertEqual(command_output.call_count, len(module.ARTIFACT_DEFINITIONS))
+
     def test_artifact_definitions_capture_direct_linked_binary_dependencies(self):
         module = load_spm_release_module()
 
