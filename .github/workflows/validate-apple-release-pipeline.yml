@@ -33,7 +33,7 @@ jobs:
       REPOSITORY_OWNER: ${{ github.repository_owner }}
       REPOSITORY_NAME: ${{ github.event.repository.name }}
       SPM_RELEASE_ENABLE_CCACHE: "1"
-      CCACHE_KEY_SCHEMA: v2
+      CCACHE_KEY_SCHEMA: v3
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_COMPILERCHECK: content
       CCACHE_NOHASHDIR: "true"
@@ -164,6 +164,7 @@ jobs:
           ruby -e 'require "yaml"; Dir[".github/workflows/*.yml"].sort.each { |path| YAML.load_file(path) }; puts "workflow-yaml-ok"'
 
       - name: Build and validate Apple XCFramework artifacts
+        id: build_artifacts
         run: |
           set -euo pipefail
 
@@ -210,8 +211,31 @@ jobs:
 
           ccache --show-stats
 
+      - name: Assess compiler cache payload
+        id: cache_payload
+        if: steps.build_artifacts.conclusion == 'success'
+        run: |
+          set -euo pipefail
+
+          payload_file_count="$(
+            find "${CCACHE_DIR}" -type f \
+              ! -name 'stats' \
+              ! -name 'stats.lock' \
+              ! -path '*/tmp/*' \
+              | wc -l | tr -d '[:space:]'
+          )"
+
+          echo "payload_file_count=${payload_file_count}" >> "${GITHUB_OUTPUT}"
+
+          if [[ "${payload_file_count}" -gt 0 ]]; then
+            echo "save_ready=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "save_ready=false" >> "${GITHUB_OUTPUT}"
+            echo "Compiler cache payload is empty; skipping cache save."
+          fi
+
       - name: Save compiler cache
-        if: always() && !cancelled() && steps.restore_ccache.outputs.cache-hit != 'true'
+        if: always() && !cancelled() && steps.restore_ccache.conclusion == 'success' && steps.build_artifacts.conclusion == 'success' && steps.cache_payload.outputs.save_ready == 'true' && steps.restore_ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: ${{ github.workspace }}/.ccache

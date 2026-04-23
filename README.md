@@ -66,7 +66,11 @@ The build matrix covers mergeable slices for:
 - CI compiler caching follows a narrow policy: persist only `.ccache` with
   `actions/cache`, scope it by cache schema, runner OS, Xcode version, upstream
   source commit, and repo-local build script inputs, and avoid caching
-  `DerivedData` or other opaque Xcode build directories by default.
+  `DerivedData` or other opaque Xcode build directories by default. Cache saves
+  are gated on a successful restore step, a successful compile-heavy build
+  step, and a non-empty `.ccache` payload so failed pre-build runs cannot
+  publish poisoned empty cache snapshots. If a poisoned cache line is
+  discovered, the workflow rotates away from it with a cache-schema bump.
 - Stable package tags such as `X.Y.Z` are reserved for the manual workflow.
   If a stable tag already exists with different generated package metadata, the
   workflow fails instead of overwriting published public artifacts.
