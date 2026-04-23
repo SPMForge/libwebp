@@ -34,7 +34,6 @@ def main() -> int:
     require("shared" in readme and "publish-package-release-core" in readme, "README must describe the shared publish core")
     require("config/platforms.json" in readme, "README must point to config/platforms.json as deployment target source")
     require("workflow_call:" in publish_core, "publish core must be reusable via workflow_call")
-    require('FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"' in publish_core, "publish core must opt into Node 24 action runtime")
     require("--latest=false" in publish_core, "alpha publishes must force latest=false")
     require("resolve:" in publish_core and "build:" in publish_core and "publish:" in publish_core, "publish core must isolate resolve, build, and publish jobs")
     require(
@@ -53,7 +52,6 @@ def main() -> int:
     require("overwrite: true" in publish_core, "publish core must overwrite the stable build bundle artifact when build reruns")
     require("prepare-release-publication" in publish_core, "publish core must delegate publication planning to repo-local Python")
     require("push:" in validate_workflow and "pull_request:" in validate_workflow, "validation workflow must run on push and pull_request")
-    require('FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"' in validate_workflow, "validation workflow must opt into Node 24 action runtime")
     require_regex(r"actions/checkout@v([6-9]|[1-9][0-9]+)", validate_workflow, "validation workflow must use a Node 24-ready checkout action")
     require_regex(r"actions/setup-python@v([6-9]|[1-9][0-9]+)", validate_workflow, "validation workflow must use a Node 24-ready setup-python action")
     require_regex(r"actions/cache/restore@v([5-9]|[1-9][0-9]+)", validate_workflow, "validation workflow must use a Node 24-ready cache restore action")

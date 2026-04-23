@@ -1,19 +1,15 @@
 # Tests
 
-This is a collection of tests for the libwebp libraries, currently covering
-fuzzing through the APIs. Additional test vector coverage can be found at:
-https://chromium.googlesource.com/webm/libwebp-test-data
+This directory contains repo-local tests for the libwebp packaging wrapper.
+The default branch does not keep upstream source tests or fuzzing targets.
 
-## Building
+## Python Tests
 
-### Fuzzers
+- `test_spm_release.py`: unit tests for release planning, artifact naming,
+  package rendering, and workflow contracts.
 
-Follow the [build instructions](../doc/building.md) for libwebp, optionally
-adding build flags for various sanitizers (e.g., -fsanitize=address).
-
-`-DWEBP_BUILD_FUZZTEST=ON` can then be used to compile the fuzzer targets:
+Run the test suite with:
 
 ```shell
-$ cmake -B ./build -S . -DWEBP_BUILD_FUZZTEST=ON
-$ make -C build
+$ python3 -m unittest tests/test_spm_release.py
 ```
