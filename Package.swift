@@ -8,7 +8,7 @@ let package = Package(
         .macOS(.v10_15),
         .tvOS(.v13),
         .watchOS(.v8),
-        .visionOS(.v1)
+        .visionOS(.v1),
     ],
     products: [
         .library(name: "WebP", targets: ["WebP", "SharpYuv"]),
@@ -20,28 +20,28 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "WebP",
-            url: "https://github.com/SPMForge/libwebp/releases/download/1.6.0/WebP-1.6.0.xcframework.zip",
-            checksum: "6b400182b1ff79a488fbe28027e9078bd7a41426f22c05720b6af1f0a0343ab1"
+            url: "https://github.com/SPMForge/libwebp/releases/download/1.6.0-alpha.16/WebP-1.6.0-alpha.16.xcframework.zip",
+            checksum: "ed05ab5ee6f1b359d906ac921c519d9d02925b45496ed7a4f83ea0cd4d8dffb3"
         ),
         .binaryTarget(
             name: "WebPDecoder",
-            url: "https://github.com/SPMForge/libwebp/releases/download/1.6.0/WebPDecoder-1.6.0.xcframework.zip",
-            checksum: "a2113dbeea4a6d842c18dd343df58936cff2b309b72b9c6d9b41bef8e9f5d727"
+            url: "https://github.com/SPMForge/libwebp/releases/download/1.6.0-alpha.16/WebPDecoder-1.6.0-alpha.16.xcframework.zip",
+            checksum: "48ea5d9b9f6f9acd70243d276008bf21235e116e30209347dd897e3650e723db"
         ),
         .binaryTarget(
             name: "WebPDemux",
-            url: "https://github.com/SPMForge/libwebp/releases/download/1.6.0/WebPDemux-1.6.0.xcframework.zip",
-            checksum: "0f8e9505416fda907e3e802078a2275b69507dfd0e4103533470342bfe0c6f0c"
+            url: "https://github.com/SPMForge/libwebp/releases/download/1.6.0-alpha.16/WebPDemux-1.6.0-alpha.16.xcframework.zip",
+            checksum: "209771a8100d0b268c126e86df14f8018409cf1f74bc872a4bcdf47ebfd48813"
         ),
         .binaryTarget(
             name: "WebPMux",
-            url: "https://github.com/SPMForge/libwebp/releases/download/1.6.0/WebPMux-1.6.0.xcframework.zip",
-            checksum: "498fc5ca0e62d7dc04d52254bbf972529777799100a1a473675be4da8ca63c19"
+            url: "https://github.com/SPMForge/libwebp/releases/download/1.6.0-alpha.16/WebPMux-1.6.0-alpha.16.xcframework.zip",
+            checksum: "056cb375494c9d4ac4b2db47da4991eabd3b3717d0fc91df2ebd6026a1a1d0c4"
         ),
         .binaryTarget(
             name: "SharpYuv",
-            url: "https://github.com/SPMForge/libwebp/releases/download/1.6.0/SharpYuv-1.6.0.xcframework.zip",
-            checksum: "8990771df6ff20e0cc63b45a94ef98b9cecb041209376cc14b684c7736dcc984"
+            url: "https://github.com/SPMForge/libwebp/releases/download/1.6.0-alpha.16/SharpYuv-1.6.0-alpha.16.xcframework.zip",
+            checksum: "c53774bc2eaaae230dc30570b1654c1aeb66c47d4513e68368811d304e6217ba"
         )
     ]
 )
