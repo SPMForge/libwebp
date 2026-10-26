@@ -100,6 +100,8 @@ jobs:
       REPOSITORY_OWNER: ${{ github.repository_owner }}
       REPOSITORY_NAME: ${{ github.event.repository.name }}
   build:
+    outputs:
+      toolchain: ${{ steps.artifact_inventory.outputs.toolchain }}
     name: Build (libwebp)
     runs-on: macos-15
     env:
@@ -253,6 +255,7 @@ jobs:
           key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ needs.resolve.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json', 'config/platforms.json') }}
           path: ${{ github.workspace }}/.ccache
       - name: Record immutable artifact inventory
+        id: artifact_inventory
         run: python3 scripts/ci_artifacts.py record --root "$RUNNER_TEMP/validation-artifacts"
       - name: Upload validation artifacts
         if: always()
@@ -299,6 +302,7 @@ jobs:
       - name: Report all stage results
         env:
           CI_NEEDS: ${{ toJSON(needs) }}
+          GH_TOKEN: ${{ github.token }}
         run: python3 scripts/ci_artifacts.py summary
     needs:
       - verify

@@ -1422,6 +1422,12 @@ class SwiftPMFixtureTests(unittest.TestCase):
         self.assertIn('path: "Artifacts/WebP.xcframework"', package_swift)
         self.assertNotIn('url: "https://github.com/', package_swift)
 
+    def test_debug_spm_consumer_declares_framework_runtime_search_paths(self):
+        module = load_spm_release_module()
+        manifest = module.render_spm_consumer_package_swift(binary_package_name="SDK", binary_package_path="../SDK")
+        self.assertIn('@loader_path/PackageFrameworks', manifest)
+        self.assertIn('"@loader_path"', manifest)
+
     def test_render_spm_consumer_package_swift_depends_on_all_binary_products(self):
         module = load_spm_release_module()
 
