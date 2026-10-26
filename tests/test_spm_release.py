@@ -1153,6 +1153,10 @@ class HeaderLayoutTests(unittest.TestCase):
                 (framework_dir / "Versions" / "A" / "Resources").resolve(),
             )
             self.assertTrue((framework_dir / "Versions" / "A" / "Resources" / "Info.plist").exists())
+            self.assertTrue((framework_dir / "Versions" / "A" / "Resources" / "COPYING").exists())
+            self.assertTrue((framework_dir / "Versions" / "A" / "Resources" / "PATENTS").exists())
+            self.assertTrue((framework_dir / "Resources" / "COPYING").exists())
+            self.assertTrue((framework_dir / "Resources" / "PATENTS").exists())
             self.assertTrue((framework_dir / "Versions" / "A" / "Modules" / "module.modulemap").exists())
             self.assertTrue((framework_dir / "Versions" / "A" / "Headers" / "webp" / "decode.h").exists())
 
@@ -1211,6 +1215,77 @@ class HeaderLayoutTests(unittest.TestCase):
                     target_name="WebP",
                     platform_group=platform_group,
                 )
+
+    def test_assemble_framework_bundle_embeds_license_for_ios(self):
+        module = load_spm_release_module()
+        definition = module.artifact_definition_by_name("WebP")
+        platform_group = next(group for group in module.PLATFORM_GROUPS if group.identifier == "ios")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            headers_root = temp_path / "headers"
+            webp_headers = headers_root / "webp"
+            webp_headers.mkdir(parents=True)
+            (webp_headers / "decode.h").write_text("// decode\n", encoding="utf-8")
+            built_binary = temp_path / "libwebp.dylib"
+            built_binary.write_text("binary\n", encoding="utf-8")
+            built_slice = module.BuiltSlice(
+                platform_group=platform_group,
+                archive_path=temp_path / "archive.xcarchive",
+                binary_path=built_binary,
+            )
+
+            with (
+                mock.patch.object(module, "run_command"),
+                mock.patch.object(module, "linked_install_name", return_value="@rpath/libsharpyuv.0.dylib"),
+            ):
+                framework_dir = module.assemble_framework_bundle(
+                    temp_path / "frameworks",
+                    definition=definition,
+                    built_slice=built_slice,
+                    headers_root=headers_root,
+                )
+
+            self.assertTrue((framework_dir / "COPYING").exists())
+            self.assertTrue((framework_dir / "PATENTS").exists())
+
+    def test_create_xcframeworks_embeds_license(self):
+        module = load_spm_release_module()
+        definition = module.artifact_definition_by_name("WebP")
+        platform_group = next(group for group in module.PLATFORM_GROUPS if group.identifier == "ios")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            artifacts_dir = temp_path / "Artifacts"
+            headers_dir = temp_path / "headers"
+            headers_dir.mkdir()
+            (headers_dir / "placeholder.h").write_text("// header\n", encoding="utf-8")
+            built_binary = temp_path / "binary"
+            built_binary.write_text("binary\n", encoding="utf-8")
+            build_output = {
+                def_item.target_name: [
+                    module.BuiltSlice(
+                        platform_group=platform_group,
+                        archive_path=temp_path / "archive.xcarchive",
+                        binary_path=built_binary,
+                    )
+                ]
+                for def_item in module.ARTIFACT_DEFINITIONS
+            }
+            header_paths = {def_item.target_name: headers_dir for def_item in module.ARTIFACT_DEFINITIONS}
+
+            def fake_run(command):
+                for def_item in module.ARTIFACT_DEFINITIONS:
+                    (artifacts_dir / def_item.xcframework_name).mkdir(parents=True, exist_ok=True)
+
+            with (
+                mock.patch.object(module, "run_command", side_effect=fake_run),
+                mock.patch.object(module, "linked_install_name", return_value="@rpath/libsharpyuv.0.dylib"),
+            ):
+                created = module.create_xcframeworks(artifacts_dir, build_output, header_paths)
+                for target_name, xcframework_path in created.items():
+                    self.assertTrue((xcframework_path / "COPYING").exists())
+                    self.assertTrue((xcframework_path / "PATENTS").exists())
 
 
 class SwiftPMFixtureTests(unittest.TestCase):

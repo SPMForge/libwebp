@@ -746,6 +746,14 @@ def assemble_framework_bundle(
     )
     (resources_dir / "Info.plist").write_bytes(framework_info_plist_bytes(definition.target_name))
 
+    repo_root = Path(__file__).resolve().parents[1]
+    copying_source = repo_root / "COPYING"
+    patents_source = repo_root / "PATENTS"
+    if copying_source.exists():
+        shutil.copy2(copying_source, resources_dir / "COPYING")
+    if patents_source.exists():
+        shutil.copy2(patents_source, resources_dir / "PATENTS")
+
     if is_versioned_macos_framework(built_slice.platform_group):
         versions_dir = framework_dir / "Versions"
         current_link = versions_dir / "Current"
@@ -787,6 +795,13 @@ def create_xcframeworks(
             )
         arguments.extend(["-output", str(xcframework_dir)])
         run_command(arguments)
+        repo_root = Path(__file__).resolve().parents[1]
+        copying_source = repo_root / "COPYING"
+        patents_source = repo_root / "PATENTS"
+        if copying_source.exists() and xcframework_dir.exists():
+            shutil.copy2(copying_source, xcframework_dir / "COPYING")
+        if patents_source.exists() and xcframework_dir.exists():
+            shutil.copy2(patents_source, xcframework_dir / "PATENTS")
         created_xcframeworks[definition.target_name] = xcframework_dir
 
     return created_xcframeworks

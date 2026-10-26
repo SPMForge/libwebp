@@ -201,3 +201,7 @@ Build prerequisites:
 - If a release job fails after pushing a tag but before uploading all assets,
   rerun the manual backfill workflow for the same tag. The workflow now repairs
   the existing GitHub Release instead of rejecting the already-published tag.
+
+## License
+
+This repository and its distributed binary frameworks are licensed under the **BSD 3-Clause License** (see [COPYING](COPYING)) and the Additional IP Rights Grant (see [PATENTS](PATENTS)), identical to upstream [`webmproject/libwebp`](https://github.com/webmproject/libwebp).

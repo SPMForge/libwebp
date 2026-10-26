@@ -81,6 +81,23 @@ def main() -> int:
     require("deployment_targets" in platform_contract, "platform contract must define deployment_targets")
     require("build_matrix" in platform_contract, "platform contract must define build_matrix")
 
+    copying_file = REPO_ROOT / "COPYING"
+    patents_file = REPO_ROOT / "PATENTS"
+    license_file = REPO_ROOT / "LICENSE"
+    require(copying_file.exists(), "libwebp must include root COPYING file")
+    require(patents_file.exists(), "libwebp must include root PATENTS file")
+    require(license_file.exists(), "libwebp must include root LICENSE file or symlink")
+    require(license_file.is_symlink() and license_file.readlink() == Path("COPYING"), "libwebp root LICENSE must be a relative symlink to COPYING")
+    require("Redistribution and use in source and binary forms" in read_text(copying_file), "COPYING must contain BSD license text")
+    require("Additional IP Rights Grant" in read_text(patents_file), "PATENTS must contain patent grant")
+    require("## License" in readme and "BSD 3-Clause License" in readme and "PATENTS" in readme, "README must contain ## License section with BSD 3-Clause and PATENTS")
+
+    spm_release_script = read_text(REPO_ROOT / "scripts" / "spm_release.py")
+    require('shutil.copy2(copying_source, resources_dir / "COPYING")' in spm_release_script, "spm_release.py must copy COPYING to framework resources")
+    require('shutil.copy2(patents_source, resources_dir / "PATENTS")' in spm_release_script, "spm_release.py must copy PATENTS to framework resources")
+    require('shutil.copy2(copying_source, xcframework_dir / "COPYING")' in spm_release_script, "spm_release.py must copy COPYING to xcframework root")
+    require('shutil.copy2(patents_source, xcframework_dir / "PATENTS")' in spm_release_script, "spm_release.py must copy PATENTS to xcframework root")
+
     print("libwebp SOP conformance verified")
     return 0
 
