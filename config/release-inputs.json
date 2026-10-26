@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "upstream_commit": "4fa21912338357f89e4fd51cf2368325b59e9bd9",
+  "upstream_repository": "https://github.com/webmproject/libwebp.git",
+  "upstream_tag": "v1.6.0",
+  "wrapper_inputs_sha256": "21dfcbca1ccb635677c810ca56ef8416b48e8ef5f54f01fa05e200ac518ddecd"
+}
