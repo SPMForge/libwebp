@@ -1,6 +1,5 @@
 name: Publish Package Release Core
-
-on:
+'on':
   workflow_call:
     inputs:
       selection_mode:
@@ -9,7 +8,7 @@ on:
       upstream_tag:
         required: false
         type: string
-        default: ""
+        default: ''
       release_channel:
         required: true
         type: string
@@ -17,33 +16,28 @@ on:
         required: false
         type: boolean
         default: false
-
 permissions:
-  contents: write
-
+  contents: read
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 concurrency:
   group: spm-package-publication-${{ github.repository }}
   cancel-in-progress: false
-
 jobs:
   verify:
-    name: Verify packaging gates
+    name: Verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version: '3.13'
       - name: Verify SOP and packaging tests
         run: |
           python3 scripts/verify_sop_conformance.py
           python3 -m unittest discover -s tests -p 'test_*.py'
-
   resolve:
-    name: Resolve release target
+    name: Resolve
     runs-on: macos-15
     outputs:
       selection_mode: ${{ steps.release_tag.outputs.selection_mode }}
@@ -61,18 +55,15 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
-
+          python-version: '3.13'
       - name: Fetch upstream tag refs
         run: |
           set -euo pipefail
 
           python3 scripts/spm_release.py fetch-upstream-tags --remote upstream
-
       - name: Resolve release target
         id: release_tag
         run: |
@@ -175,11 +166,9 @@ jobs:
           echo "build_tag=${build_tag}" >> "${GITHUB_OUTPUT}"
           echo "remote_tag_exists=${remote_tag_exists}" >> "${GITHUB_OUTPUT}"
           echo "remote_tag_commit=${remote_tag_commit}" >> "${GITHUB_OUTPUT}"
-
       - name: Capture immutable release inputs
         run: |
           python3 scripts/release_inputs.py capture --upstream-tag "${{ steps.release_tag.outputs.upstream_tag }}" --upstream-commit "${{ steps.release_tag.outputs.upstream_commit }}"
-
       - name: Inspect existing release state
         id: release_status
         env:
@@ -206,10 +195,12 @@ jobs:
             --tag "${{ steps.release_tag.outputs.build_tag }}" \
             --release-channel "${{ steps.release_tag.outputs.release_channel }}" \
             --github-output "$GITHUB_OUTPUT"
-
+    needs: verify
   build:
-    name: Build release artifacts
-    needs: [verify, resolve]
+    name: Build (libwebp)
+    needs:
+      - verify
+      - resolve
     if: needs.resolve.outputs.publication_mode != 'skip' && needs.resolve.outputs.publication_mode != 'metadata'
     runs-on: macos-15
     env:
@@ -220,6 +211,7 @@ jobs:
       CCACHE_COMPILERCHECK: content
       CCACHE_NOHASHDIR: "true"
       CCACHE_MAXSIZE: 750M
+      SPMFORGE_DEFER_CONSUMERS: "1"
     outputs:
       artifact_name: ${{ steps.upload_bundle.outputs.artifact-id }}
     steps:
@@ -227,12 +219,10 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
-
+          python-version: '3.13'
       - name: Verify build prerequisites
         run: |
           set -euo pipefail
@@ -252,7 +242,6 @@ jobs:
           xcrun --sdk watchsimulator --show-sdk-path >/dev/null
           xcrun --sdk xros --show-sdk-path >/dev/null
           xcrun --sdk xrsimulator --show-sdk-path >/dev/null
-
       - name: Capture build cache inputs
         id: cache_inputs
         run: |
@@ -263,13 +252,11 @@ jobs:
           ccache --set-config=max_size="${CCACHE_MAXSIZE}"
           xcode_version_hash="$(xcodebuild -version | shasum -a 256 | cut -c1-16)"
           echo "xcode_version_hash=${xcode_version_hash}" >> "${GITHUB_OUTPUT}"
-
       - name: Fetch upstream tag refs
         run: |
           set -euo pipefail
 
           python3 scripts/spm_release.py fetch-upstream-tags --remote upstream
-
       - name: Export upstream source tree
         id: source_tree
         run: |
@@ -281,7 +268,6 @@ jobs:
             --output-dir "${source_dir}"
 
           echo "source_dir=${source_dir}" >> "${GITHUB_OUTPUT}"
-
       - name: Restore compiler cache
         id: restore_ccache
         uses: actions/cache/restore@v5
@@ -291,13 +277,11 @@ jobs:
           restore-keys: |
             libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ needs.resolve.outputs.upstream_commit }}-
             libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-
-
       - name: Reset ccache statistics
         run: |
           set -euo pipefail
 
           ccache --zero-stats
-
       - name: Build release artifacts
         id: build_artifacts
         run: |
@@ -319,14 +303,12 @@ jobs:
           python3 scripts/spm_release.py compute-checksums \
             --archives-dir "${artifacts_dir}" \
             --output "${metadata_dir}/checksums.json"
-
       - name: Show ccache statistics
         if: always()
         run: |
           set -euo pipefail
 
           ccache --show-stats
-
       - name: Assess compiler cache payload
         id: cache_payload
         if: steps.build_artifacts.conclusion == 'success'
@@ -349,14 +331,14 @@ jobs:
             echo "save_ready=false" >> "${GITHUB_OUTPUT}"
             echo "Compiler cache payload is empty; skipping cache save."
           fi
-
       - name: Save compiler cache
         if: always() && !cancelled() && steps.restore_ccache.conclusion == 'success' && steps.build_artifacts.conclusion == 'success' && steps.cache_payload.outputs.save_ready == 'true' && steps.restore_ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: ${{ github.workspace }}/.ccache
           key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ needs.resolve.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json', 'config/platforms.json') }}
-
+      - name: Record immutable artifact inventory
+        run: python3 scripts/ci_artifacts.py record --root "$RUNNER_TEMP/release-artifacts"
       - name: Upload release bundle
         id: upload_bundle
         uses: actions/upload-artifact@v7
@@ -367,11 +349,36 @@ jobs:
             ${{ runner.temp }}/release-artifacts
             ${{ runner.temp }}/release-metadata/checksums.json
           if-no-files-found: error
-
+    permissions:
+      contents: read
+  consumers:
+    name: Validate Consumers
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Download final archives
+        uses: actions/download-artifact@v8
+        with:
+          name: package-build-bundle-${{ github.run_id }}
+          path: ${{ runner.temp }}/consumer-inputs
+      - name: Run Debug and Release consumers
+        run: python3 scripts/ci_artifacts.py consumers --root "$RUNNER_TEMP/consumer-inputs" --product "libwebp"
+    needs:
+      - resolve
+      - build
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
   publish:
-    name: Publish package release
-    needs: [resolve, build]
-    if: always() && needs.resolve.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') && needs.resolve.outputs.publication_mode != 'skip' && needs.resolve.outputs.publication_mode != 'metadata'
+    name: Publish
+    needs:
+      - resolve
+      - build
+      - consumers
+    if: (always() && needs.resolve.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') && needs.resolve.outputs.publication_mode != 'skip' && needs.resolve.outputs.publication_mode != 'metadata') && (needs.consumers.result == 'success' || (needs.resolve.outputs.publication_mode == 'skip' && needs.consumers.result == 'skipped'))
     runs-on: macos-15
     env:
       REPOSITORY_OWNER: ${{ github.repository_owner }}
@@ -382,22 +389,18 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
-
+          python-version: '3.13'
       - name: Download release bundle
         uses: actions/download-artifact@v8
         with:
           name: package-build-bundle-${{ github.run_id }}
           path: ${{ runner.temp }}/publication-inputs
-
       - name: Restore immutable release inputs
         run: |
           python3 scripts/release_inputs.py capture --upstream-tag "${{ needs.resolve.outputs.upstream_tag }}" --upstream-commit "${{ needs.resolve.outputs.upstream_commit }}"
-
       - name: Prepare release publication
         id: publication
         env:
@@ -437,7 +440,6 @@ jobs:
           fi
 
           python3 scripts/spm_release.py "${prepare_args[@]}"
-
       - name: Create package commit and push release tag
         if: steps.publication.outputs.mode == 'fresh'
         id: git_release
@@ -465,7 +467,6 @@ jobs:
           git push origin "refs/tags/${{ steps.publication.outputs.package_tag }}"
 
           echo "commit_sha=${commit_sha}" >> "${GITHUB_OUTPUT}"
-
       - name: Create GitHub release
         if: steps.publication.outputs.mode == 'fresh'
         env:
@@ -490,7 +491,6 @@ jobs:
           fi
 
           gh release create "${release_args[@]}"
-
       - name: Repair GitHub release
         if: steps.publication.outputs.mode == 'repair'
         env:
@@ -528,7 +528,6 @@ jobs:
 
             gh release create "${release_args[@]}"
           fi
-
       - name: Normalize GitHub release metadata
         if: steps.publication.outputs.mode != 'skip'
         env:
@@ -556,7 +555,6 @@ jobs:
               -f name="${{ steps.publication.outputs.package_tag }}" \
               -F body=@${metadata_dir}/release-notes.md >/dev/null
           fi
-
       - name: Select release commit
         if: ${{ inputs.publish_to_main && steps.publication.outputs.mode != 'skip' }}
         id: release_commit
@@ -568,17 +566,19 @@ jobs:
           else
             echo "commit_sha=${{ steps.publication.outputs.remote_tag_commit }}" >> "${GITHUB_OUTPUT}"
           fi
-
       - name: Optionally update default branch
         if: ${{ inputs.publish_to_main && steps.publication.outputs.mode != 'skip' }}
         run: |
           set -euo pipefail
 
           git push origin "${{ steps.release_commit.outputs.commit_sha }}:refs/heads/${DEFAULT_BRANCH}"
-
+    permissions:
+      contents: write
   promote_existing_stable:
-    name: Promote existing stable metadata
-    needs: [verify, resolve]
+    name: Promote Stable
+    needs:
+      - verify
+      - resolve
     if: needs.resolve.result == 'success' && needs.resolve.outputs.publication_mode == 'skip' && inputs.release_channel == 'stable' && inputs.publish_to_main
     runs-on: ubuntu-latest
     steps:
@@ -594,10 +594,13 @@ jobs:
           git fetch origin "refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" "refs/tags/${TARGET_VERSION}:refs/tags/${TARGET_VERSION}"
           release_commit="$(git rev-parse "refs/tags/${TARGET_VERSION}^{commit}")"
           git push origin "${release_commit}:refs/heads/${DEFAULT_BRANCH}"
-
+    permissions:
+      contents: write
   repair_existing_metadata:
-    name: Repair complete release metadata without rebuilding
-    needs: [verify, resolve]
+    name: Repair Metadata
+    needs:
+      - verify
+      - resolve
     if: needs.resolve.result == 'success' && needs.resolve.outputs.publication_mode == 'metadata'
     runs-on: ubuntu-latest
     steps:
@@ -624,3 +627,46 @@ jobs:
             release_commit="$(git rev-parse "refs/tags/${TARGET_VERSION}^{commit}")"
             git push origin "${release_commit}:refs/heads/${DEFAULT_BRANCH}"
           fi
+    permissions:
+      contents: write
+  reuse:
+    name: Reuse
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Explain existing release reuse
+        run: echo "Input identity and complete published assets match; no build, tag or upload is required."
+    needs:
+      - verify
+      - resolve
+    if: needs.resolve.outputs.publication_mode == 'skip'
+  summary:
+    name: Summary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Report all stage results
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci_artifacts.py summary
+    needs:
+      - verify
+      - resolve
+      - build
+      - consumers
+      - publish
+      - promote_existing_stable
+      - repair_existing_metadata
+      - reuse
+    if: always()
+defaults:
+  run:
+    shell: bash

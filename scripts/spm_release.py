@@ -1175,6 +1175,7 @@ def verify_spm_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -
                 + expected_install_name
             )
 
+    run_command([str(debug_binary)], cwd=consumer_root)
     run_command([str(release_binary)], cwd=consumer_root)
 
 
@@ -1293,7 +1294,8 @@ def build_xcframework_archives(
         xcframework_root = root_dir / "xcframeworks"
         xcframeworks = create_xcframeworks(xcframework_root, build_output, header_paths)
         validate_xcframeworks(xcframeworks)
-        verify_consumer_fixture(xcframeworks, root_dir)
+        if os.environ.get("SPMFORGE_DEFER_CONSUMERS") != "1":
+            verify_consumer_fixture(xcframeworks, root_dir)
         artifact_paths = zip_xcframeworks(tag, xcframeworks, output_dir)
 
         if keep_xcframeworks:

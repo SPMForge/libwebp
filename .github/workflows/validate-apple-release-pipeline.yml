@@ -1,91 +1,63 @@
 name: Validate Apple Release Pipeline
-
 run-name: Validate pipeline for ${{ github.event_name == 'pull_request' && format('PR {0}', github.event.pull_request.number) || github.ref_name }}
-
-on:
+'on':
   push:
     branches:
       - main
-  pull_request:
+  pull_request: null
   workflow_dispatch:
     inputs:
       upstream_tag:
         description: Optional stable upstream tag to validate instead of the latest upstream stable release
         required: false
-        default: ""
+        default: ''
         type: string
-
 permissions:
   contents: read
-
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-
 concurrency:
   group: validate-apple-release-pipeline-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
-
 jobs:
-  validate:
-    name: Validate release pipeline
-    runs-on: macos-15
-    env:
-      REPOSITORY_OWNER: ${{ github.repository_owner }}
-      REPOSITORY_NAME: ${{ github.event.repository.name }}
-      SPM_RELEASE_ENABLE_CCACHE: "1"
-      CCACHE_KEY_SCHEMA: v3
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_COMPILERCHECK: content
-      CCACHE_NOHASHDIR: "true"
-      CCACHE_MAXSIZE: 750M
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - name: Run unit tests
+        run: |
+          set -euo pipefail
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+          python3 -m unittest discover -s tests -p "test_*.py" -v
+      - name: Verify SOP conformance
+        run: |
+          set -euo pipefail
+
+          python3 scripts/verify_sop_conformance.py
+      - name: Validate workflow YAML
+        run: |
+          set -euo pipefail
+
+          ruby -e 'require "yaml"; Dir[".github/workflows/*.yml"].sort.each { |path| YAML.load_file(path) }; puts "workflow-yaml-ok"'
+  resolve:
+    name: Resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
         with:
-          python-version: "3.13"
-
-      - name: Verify build prerequisites
-        run: |
-          set -euo pipefail
-
-          command -v cmake >/dev/null 2>&1 || brew install cmake
-          command -v ccache >/dev/null 2>&1 || brew install ccache
-          command -v xcodebuild >/dev/null
-          command -v swift >/dev/null
-          command -v plutil >/dev/null
-          xcrun --find vtool >/dev/null
-          xcrun --sdk iphoneos --show-sdk-path >/dev/null
-          xcrun --sdk iphonesimulator --show-sdk-path >/dev/null
-          xcrun --sdk macosx --show-sdk-path >/dev/null
-          xcrun --sdk appletvos --show-sdk-path >/dev/null
-          xcrun --sdk appletvsimulator --show-sdk-path >/dev/null
-          xcrun --sdk watchos --show-sdk-path >/dev/null
-          xcrun --sdk watchsimulator --show-sdk-path >/dev/null
-          xcrun --sdk xros --show-sdk-path >/dev/null
-          xcrun --sdk xrsimulator --show-sdk-path >/dev/null
-
-      - name: Capture build cache inputs
-        id: cache_inputs
-        run: |
-          set -euo pipefail
-
-          mkdir -p "${CCACHE_DIR}"
-          echo "CCACHE_BASEDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
-          ccache --set-config=max_size="${CCACHE_MAXSIZE}"
-          xcode_version_hash="$(xcodebuild -version | shasum -a 256 | cut -c1-16)"
-          echo "xcode_version_hash=${xcode_version_hash}" >> "${GITHUB_OUTPUT}"
-
+          fetch-depth: 0
       - name: Fetch upstream tag refs
         run: |
           set -euo pipefail
 
           python3 scripts/spm_release.py fetch-upstream-tags --remote upstream
-
       - name: Resolve upstream tag for validation
         id: release_tag
         run: |
@@ -116,7 +88,72 @@ jobs:
           echo "upstream_tag=${upstream_tag}" >> "${GITHUB_OUTPUT}"
           echo "upstream_commit=${upstream_commit}" >> "${GITHUB_OUTPUT}"
           echo "package_tag=${package_tag}" >> "${GITHUB_OUTPUT}"
+      - name: Capture immutable source identity
+        id: release_inputs
+        run: python3 scripts/release_inputs.py capture --upstream-tag "${{ steps.release_tag.outputs.upstream_tag }}" --github-output "$GITHUB_OUTPUT"
+    needs: verify
+    outputs:
+      upstream_tag: ${{ steps.release_tag.outputs.upstream_tag }}
+      package_tag: ${{ steps.release_tag.outputs.package_tag }}
+      upstream_commit: ${{ steps.release_inputs.outputs.upstream_commit }}
+    env:
+      REPOSITORY_OWNER: ${{ github.repository_owner }}
+      REPOSITORY_NAME: ${{ github.event.repository.name }}
+  build:
+    name: Build (libwebp)
+    runs-on: macos-15
+    env:
+      REPOSITORY_OWNER: ${{ github.repository_owner }}
+      REPOSITORY_NAME: ${{ github.event.repository.name }}
+      SPM_RELEASE_ENABLE_CCACHE: "1"
+      CCACHE_KEY_SCHEMA: v3
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_MAXSIZE: 750M
+      SPMFORGE_EXPECTED_UPSTREAM_COMMIT: ${{ needs.resolve.outputs.upstream_commit }}
+      SPMFORGE_DEFER_CONSUMERS: "1"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Verify build prerequisites
+        run: |
+          set -euo pipefail
 
+          command -v cmake >/dev/null 2>&1 || brew install cmake
+          command -v ccache >/dev/null 2>&1 || brew install ccache
+          command -v xcodebuild >/dev/null
+          command -v swift >/dev/null
+          command -v plutil >/dev/null
+          xcrun --find vtool >/dev/null
+          xcrun --sdk iphoneos --show-sdk-path >/dev/null
+          xcrun --sdk iphonesimulator --show-sdk-path >/dev/null
+          xcrun --sdk macosx --show-sdk-path >/dev/null
+          xcrun --sdk appletvos --show-sdk-path >/dev/null
+          xcrun --sdk appletvsimulator --show-sdk-path >/dev/null
+          xcrun --sdk watchos --show-sdk-path >/dev/null
+          xcrun --sdk watchsimulator --show-sdk-path >/dev/null
+          xcrun --sdk xros --show-sdk-path >/dev/null
+          xcrun --sdk xrsimulator --show-sdk-path >/dev/null
+      - name: Capture build cache inputs
+        id: cache_inputs
+        run: |
+          set -euo pipefail
+
+          mkdir -p "${CCACHE_DIR}"
+          echo "CCACHE_BASEDIR=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
+          ccache --set-config=max_size="${CCACHE_MAXSIZE}"
+          xcode_version_hash="$(xcodebuild -version | shasum -a 256 | cut -c1-16)"
+          echo "xcode_version_hash=${xcode_version_hash}" >> "${GITHUB_OUTPUT}"
+      - name: Fetch resolved upstream snapshot
+        run: |
+          python3 scripts/spm_release.py fetch-upstream-tags --remote upstream
       - name: Export upstream source tree
         id: source_tree
         run: |
@@ -124,45 +161,24 @@ jobs:
 
           source_dir="${RUNNER_TEMP}/libwebp-source"
           python3 scripts/spm_release.py export-upstream-source \
-            --tag "${{ steps.release_tag.outputs.upstream_tag }}" \
+            --tag "${{ needs.resolve.outputs.upstream_tag }}" \
             --output-dir "${source_dir}"
 
           echo "source_dir=${source_dir}" >> "${GITHUB_OUTPUT}"
-
       - name: Restore compiler cache
         id: restore_ccache
         uses: actions/cache/restore@v5
         with:
+          key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ needs.resolve.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json', 'config/platforms.json') }}
           path: ${{ github.workspace }}/.ccache
-          key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json', 'config/platforms.json') }}
           restore-keys: |
             libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-
             libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-
-
       - name: Reset ccache statistics
         run: |
           set -euo pipefail
 
           ccache --zero-stats
-
-      - name: Run unit tests
-        run: |
-          set -euo pipefail
-
-          python3 -m unittest discover -s tests -p "test_*.py" -v
-
-      - name: Verify SOP conformance
-        run: |
-          set -euo pipefail
-
-          python3 scripts/verify_sop_conformance.py
-
-      - name: Validate workflow YAML
-        run: |
-          set -euo pipefail
-
-          ruby -e 'require "yaml"; Dir[".github/workflows/*.yml"].sort.each { |path| YAML.load_file(path) }; puts "workflow-yaml-ok"'
-
       - name: Build and validate Apple XCFramework artifacts
         id: build_artifacts
         run: |
@@ -176,9 +192,8 @@ jobs:
           ./scripts/build_apple_xcframeworks.sh \
             --source-dir "${{ steps.source_tree.outputs.source_dir }}" \
             --output-dir "${artifacts_dir}" \
-            --tag "${{ steps.release_tag.outputs.package_tag }}" \
+            --tag "${{ needs.resolve.outputs.package_tag }}" \
             --working-dir "${RUNNER_TEMP}/xcframework-build"
-
       - name: Validate rendered package contract
         run: |
           set -euo pipefail
@@ -197,20 +212,18 @@ jobs:
           python3 scripts/spm_release.py render-package-swift \
             --owner "${REPOSITORY_OWNER}" \
             --repository "${REPOSITORY_NAME}" \
-            --tag "${{ steps.release_tag.outputs.package_tag }}" \
+            --tag "${{ needs.resolve.outputs.package_tag }}" \
             --checksums-json "${metadata_dir}/checksums.json" \
             --output "${metadata_dir}/Package.swift"
 
           cp "${metadata_dir}/Package.swift" "${validation_dir}/Package.swift"
           swift package dump-package --package-path "${validation_dir}" >/dev/null
-
       - name: Show ccache statistics
         if: always()
         run: |
           set -euo pipefail
 
           ccache --show-stats
-
       - name: Assess compiler cache payload
         id: cache_payload
         if: steps.build_artifacts.conclusion == 'success'
@@ -233,18 +246,66 @@ jobs:
             echo "save_ready=false" >> "${GITHUB_OUTPUT}"
             echo "Compiler cache payload is empty; skipping cache save."
           fi
-
       - name: Save compiler cache
         if: always() && !cancelled() && steps.restore_ccache.conclusion == 'success' && steps.build_artifacts.conclusion == 'success' && steps.cache_payload.outputs.save_ready == 'true' && steps.restore_ccache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
+          key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ needs.resolve.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json', 'config/platforms.json') }}
           path: ${{ github.workspace }}/.ccache
-          key: libwebp-ccache-${{ env.CCACHE_KEY_SCHEMA }}-${{ runner.os }}-${{ steps.cache_inputs.outputs.xcode_version_hash }}-${{ steps.release_tag.outputs.upstream_commit }}-${{ hashFiles('scripts/spm_release.py', 'scripts/build_apple_xcframeworks.sh', 'config/source-acquisition.json', 'config/platforms.json') }}
-
+      - name: Record immutable artifact inventory
+        run: python3 scripts/ci_artifacts.py record --root "$RUNNER_TEMP/validation-artifacts"
       - name: Upload validation artifacts
         if: always()
         uses: actions/upload-artifact@v7
         with:
+          if-no-files-found: ignore
           name: apple-xcframework-validation-${{ github.run_id }}
           path: ${{ runner.temp }}/validation-artifacts
-          if-no-files-found: ignore
+    needs:
+      - verify
+      - resolve
+    permissions:
+      contents: read
+  consumers:
+    name: Validate Consumers
+    runs-on: macos-15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Download final archives
+        uses: actions/download-artifact@v8
+        with:
+          name: apple-xcframework-validation-${{ github.run_id }}
+          path: ${{ runner.temp }}/consumer-inputs
+      - name: Run Debug and Release consumers
+        run: python3 scripts/ci_artifacts.py consumers --root "$RUNNER_TEMP/consumer-inputs" --product "libwebp"
+    needs:
+      - resolve
+      - build
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+  summary:
+    name: Summary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Report all stage results
+        env:
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci_artifacts.py summary
+    needs:
+      - verify
+      - resolve
+      - build
+      - consumers
+    if: always()
+defaults:
+  run:
+    shell: bash

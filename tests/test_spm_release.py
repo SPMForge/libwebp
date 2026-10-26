@@ -1720,8 +1720,8 @@ class WorkflowTopologyTests(unittest.TestCase):
         self.assertIn("resolve:", workflow_body)
         self.assertIn("build:", workflow_body)
         self.assertIn("publish:", workflow_body)
-        self.assertIn("needs: [verify, resolve]", workflow_body)
-        self.assertIn("needs: [resolve, build]", workflow_body)
+        self.assertRegex(workflow_body, r"needs:\n +[\-] verify\n +[\-] resolve")
+        self.assertRegex(workflow_body, r"needs:\n +[\-] resolve\n +[\-] build\n +[\-] consumers")
         self.assertEqual(
             workflow_body.count("python3 scripts/spm_release.py fetch-upstream-tags --remote upstream"),
             2,
