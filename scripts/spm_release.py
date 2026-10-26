@@ -26,6 +26,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+import release_inputs
+
 from spm_release_support.package_validation import (
     render_local_binary_package_swift,
     render_package_swift,
@@ -90,6 +92,7 @@ class GitHubReleaseState:
     release_is_latest: bool
     release_asset_names: tuple[str, ...]
     release_id: int | None
+    release_is_draft: bool = False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -186,6 +189,8 @@ def export_upstream_source_tree(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     upstream_ref = config.upstream_ref_for_tag(tag)
+    if os.environ.get("SPMFORGE_EXPECTED_UPSTREAM_COMMIT"):
+        upstream_ref = release_inputs.resolve_source(REPO_ROOT, tag)
     command_output(["git", "rev-parse", "--verify", "--quiet", f"{upstream_ref}^{{commit}}"])
     try:
         run_command(
@@ -1170,6 +1175,8 @@ def verify_spm_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -
                 + expected_install_name
             )
 
+    run_command([str(release_binary)], cwd=consumer_root)
+
 
 def verify_consumer_fixture(xcframeworks: dict[str, Path], work_dir: Path) -> None:
     verify_cmake_consumer_fixture(xcframeworks, work_dir)
@@ -1375,6 +1382,9 @@ def inspect_github_release_state(*, repository: str, tag: str) -> GitHubReleaseS
     release_is_prerelease = release_payload.get("prerelease")
     if not isinstance(release_is_prerelease, bool):
         raise RuntimeError(f"GitHub release payload for {tag} is missing boolean prerelease state.")
+    release_is_draft = release_payload.get("draft", False)
+    if not isinstance(release_is_draft, bool):
+        raise RuntimeError(f"GitHub release payload for {tag} is missing boolean draft state.")
     release_assets = release_payload.get("assets")
     if not isinstance(release_assets, list):
         raise RuntimeError(f"GitHub release payload for {tag} is missing an assets list.")
@@ -1399,6 +1409,7 @@ def inspect_github_release_state(*, repository: str, tag: str) -> GitHubReleaseS
         release_is_latest=release_is_latest,
         release_asset_names=tuple(release_asset_names),
         release_id=release_id,
+        release_is_draft=release_is_draft,
     )
 
 
@@ -1412,6 +1423,39 @@ def read_optional_git_file(ref: str, relative_path: str) -> str | None:
     if result.returncode == 0:
         return result.stdout
     return None
+
+
+def repo_has_changes_since_tag(tag: str, *, repo_root: Path = REPO_ROOT) -> bool:
+    tag_rev = subprocess.run(
+        ["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"],
+        check=False,
+        cwd=repo_root,
+        capture_output=True,
+    )
+    if tag_rev.returncode != 0:
+        return True
+
+    diff_cmd = [
+        "git",
+        "diff",
+        "--quiet",
+        f"refs/tags/{tag}",
+        "HEAD",
+        "--",
+        ".",
+        ":(exclude)Package.swift",
+        ":(exclude)config/current_release.json",
+        ":(exclude)scripts/spm/current_release.json",
+        ":(exclude)config/PackageVersion.txt",
+        ":(exclude)config/checksums",
+    ]
+    completed = subprocess.run(
+        diff_cmd,
+        check=False,
+        cwd=repo_root,
+        capture_output=True,
+    )
+    return completed.returncode != 0
 
 
 def render_and_validate_package_manifest(
@@ -1527,6 +1571,8 @@ def prepare_release_publication(
 
     if release_channel == "stable":
         if final_remote_tag_exists:
+            if release_inputs.tag_inputs_match(REPO_ROOT, final_package_tag) is False:
+                raise ValueError("Stable publication refused because release inputs differ from the existing tag.")
             candidate_package_swift = read_optional_git_file(f"refs/tags/{final_package_tag}", "Package.swift")
             if candidate_package_swift is None:
                 raise RuntimeError(
@@ -1536,7 +1582,12 @@ def prepare_release_publication(
     else:
         if latest_package_tag:
             latest_package_swift = read_optional_git_file(f"refs/tags/{latest_package_tag}", "Package.swift")
-            if latest_package_swift is not None and latest_package_swift == rendered_package_swift:
+            contract_matches = (
+                latest_package_swift == rendered_package_swift
+                and release_inputs.tag_inputs_match(REPO_ROOT, latest_package_tag) is not False
+            )
+
+            if contract_matches:
                 if not final_remote_tag_exists or not final_remote_tag_commit:
                     raise ValueError(
                         "latest_package_tag matched the rendered package, but the remote tag state is incomplete."
@@ -1769,6 +1820,84 @@ def command_prepare_release_publication(args: argparse.Namespace) -> int:
     return 0
 
 
+def inspect_release(
+    *,
+    repository: str,
+    package_tag: str,
+    upstream_tag: str,
+    release_channel: str,
+    tag_exists: bool,
+) -> dict[str, object]:
+    required_assets = required_release_asset_names(package_tag)
+    release_state = GitHubReleaseState(
+        release_exists=False,
+        release_is_prerelease=False,
+        release_is_latest=False,
+        release_asset_names=(),
+        release_id=None,
+    )
+    if tag_exists:
+        release_state = inspect_github_release_state(repository=repository, tag=package_tag)
+
+    published_assets = set(release_state.release_asset_names)
+    missing_assets = tuple(asset for asset in required_assets if asset not in published_assets)
+
+    metadata_needs_repair = False
+    if release_state.release_exists:
+        if release_channel == "stable":
+            metadata_needs_repair = release_state.release_is_prerelease or release_state.release_is_draft
+        else:
+            metadata_needs_repair = (not release_state.release_is_prerelease) or release_state.release_is_latest or release_state.release_is_draft
+
+    if not tag_exists:
+        mode = "fresh"
+    elif (not release_state.release_exists) or missing_assets or metadata_needs_repair:
+        mode = "repair"
+    else:
+        mode = "skip"
+
+    if mode == "repair" and release_state.release_exists and not missing_assets and metadata_needs_repair:
+        if release_inputs.tag_inputs_match(REPO_ROOT, package_tag) is True:
+            mode = "metadata"
+
+    return {
+        "package_tag": package_tag,
+        "upstream_tag": upstream_tag,
+        "release_channel": release_channel,
+        "tag_exists": tag_exists,
+        "release_exists": release_state.release_exists,
+        "required_assets": list(required_assets),
+        "published_assets": list(published_assets),
+        "missing_assets": list(missing_assets),
+        "release_is_prerelease": release_state.release_is_prerelease,
+        "release_is_latest": release_state.release_is_latest,
+        "metadata_needs_repair": metadata_needs_repair,
+        "mode": mode,
+    }
+
+
+def command_inspect_release(args: argparse.Namespace) -> int:
+    payload = inspect_release(
+        repository=args.github_repository,
+        package_tag=args.package_tag,
+        upstream_tag=args.upstream_tag,
+        release_channel=args.release_channel,
+        tag_exists=args.tag_exists,
+    )
+    if args.github_output:
+        write_github_outputs(
+            Path(args.github_output),
+            {
+                "mode": str(payload["mode"]),
+                "release_exists": str(payload["release_exists"]).lower(),
+                "missing_assets": ",".join(payload["missing_assets"]),
+                "metadata_needs_repair": str(payload["metadata_needs_repair"]).lower(),
+            },
+        )
+    print(json.dumps(payload, indent=2))
+    return 0
+
+
 def command_print_build_plan(_: argparse.Namespace) -> int:
     print(json.dumps(build_plan_payload(), indent=2))
     return 0
@@ -1923,6 +2052,18 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_release_publication_parser.add_argument("--release-is-latest", action="store_true")
     resolve_release_publication_parser.add_argument("--remote-tag-exists", action="store_true")
     resolve_release_publication_parser.set_defaults(func=command_resolve_release_publication)
+
+    inspect_release_parser = subparsers.add_parser(
+        "inspect-release",
+        help="Inspect whether a package release is complete or needs repair.",
+    )
+    inspect_release_parser.add_argument("--github-repository", required=True)
+    inspect_release_parser.add_argument("--package-tag", required=True)
+    inspect_release_parser.add_argument("--upstream-tag", required=True)
+    inspect_release_parser.add_argument("--release-channel", choices=("alpha", "stable"), required=True)
+    inspect_release_parser.add_argument("--tag-exists", action="store_true")
+    inspect_release_parser.add_argument("--github-output", default="")
+    inspect_release_parser.set_defaults(func=command_inspect_release)
 
     prepare_release_publication_parser = subparsers.add_parser(
         "prepare-release-publication",

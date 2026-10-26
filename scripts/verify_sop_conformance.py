@@ -30,6 +30,11 @@ def main() -> int:
     publish_core = read_text(WORKFLOWS_DIR / "publish-package-release-core.yml")
     validate_workflow = read_text(WORKFLOWS_DIR / "validate-apple-release-pipeline.yml")
 
+    require((REPO_ROOT / "config").is_dir(), "config/ directory must exist")
+    require((REPO_ROOT / "scripts" / "verify_sop_conformance.py").is_file(), "scripts/verify_sop_conformance.py must exist")
+    require((REPO_ROOT / "tests").is_dir(), "top-level tests/ directory must exist")
+    require((REPO_ROOT / "docs" / "how-to-build" / "swiftpm-binary-package.md").is_file(), "docs/how-to-build/swiftpm-binary-package.md must exist")
+
     require("packaging wrapper" in readme, "README must describe the repo as a packaging wrapper")
     require("shared" in readme and "publish-package-release-core" in readme, "README must describe the shared publish core")
     require("config/platforms.json" in readme, "README must point to config/platforms.json as deployment target source")
@@ -97,6 +102,17 @@ def main() -> int:
     require('shutil.copy2(patents_source, resources_dir / "PATENTS")' in spm_release_script, "spm_release.py must copy PATENTS to framework resources")
     require('shutil.copy2(copying_source, xcframework_dir / "COPYING")' in spm_release_script, "spm_release.py must copy COPYING to xcframework root")
     require('shutil.copy2(patents_source, xcframework_dir / "PATENTS")' in spm_release_script, "spm_release.py must copy PATENTS to xcframework root")
+    require('run_command([str(release_binary)]' in spm_release_script, "spm_release.py must execute release consumer binary directly")
+    require("restore-homebrew-download-cache" not in publish_core and "HOMEBREW_CACHE" not in publish_core, "publish core must not cache HOMEBREW_CACHE to prevent runner symlink poisoning")
+    require("restore-homebrew-download-cache" not in validate_workflow and "HOMEBREW_CACHE" not in validate_workflow, "validate workflow must not cache HOMEBREW_CACHE to prevent runner symlink poisoning")
+
+    publication_text = (REPO_ROOT / ".github/workflows/publish-package-release-core.yml").read_text()
+    require((REPO_ROOT / "scripts/release_inputs.py").is_file(), "immutable release input helper is required")
+    require("scripts/release_inputs.py capture" in publication_text, "publish core must record immutable release inputs")
+    require("SPMFORGE_EXPECTED_UPSTREAM_COMMIT" in publication_text, "build must pin the resolved upstream commit")
+    require("config/release-inputs.json" in publication_text, "package tags must own release input metadata")
+    require("group: spm-package-publication-${{ github.repository }}" in publication_text, "scheduled and manual publication must share a repository lock")
+    require("--clobber" not in publication_text, "publish repair must not overwrite existing assets")
 
     print("libwebp SOP conformance verified")
     return 0

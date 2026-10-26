@@ -202,6 +202,18 @@ Build prerequisites:
   rerun the manual backfill workflow for the same tag. The workflow now repairs
   the existing GitHub Release instead of rejecting the already-published tag.
 
+## Documentation
+
+- Wrapper package contract and workflow guide: [docs/how-to-build/swiftpm-binary-package.md](docs/how-to-build/swiftpm-binary-package.md)
+
 ## License
 
 This repository and its distributed binary frameworks are licensed under the **BSD 3-Clause License** (see [COPYING](COPYING)) and the Additional IP Rights Grant (see [PATENTS](PATENTS)), identical to upstream [`webmproject/libwebp`](https://github.com/webmproject/libwebp).
+
+## Release Input Identity
+
+New releases record immutable upstream and wrapper input identity in
+`config/release-inputs.json`. Scheduled and manual alpha use the same reuse/evaluate
+policy and repository publication lock. See the
+[repeat-publication SOP](docs/how-to-build/swiftpm-binary-package.md#immutable-source-and-repeat-publication-sop)
+for source pinning, legacy tags, strict repair checks, and verification boundaries.

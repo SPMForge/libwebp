@@ -623,6 +623,66 @@ class PreparedReleasePublicationTests(unittest.TestCase):
                         github_repository="SPMForge/libwebp",
                     )
 
+    def test_prepare_release_publication_advances_alpha_when_checksum_or_url_differs(self):
+        module = load_spm_release_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            metadata_dir = temp_path / "metadata"
+            metadata_dir.mkdir()
+            (metadata_dir / "checksums.json").write_text("{}", encoding="utf-8")
+
+            latest_manifest = (
+                '// swift-tools-version: 5.9\n'
+                'import PackageDescription\n'
+                'let package = Package(name: "libwebp", targets: [\n'
+                '    .binaryTarget(name: "WebP", url: "https://github.com/SPMForge/libwebp/releases/download/1.6.0-alpha.1/WebP-1.6.0-alpha.1.xcframework.zip", checksum: "1111111111111111111111111111111111111111111111111111111111111111")\n'
+                '])\n'
+            )
+            rendered_manifest = (
+                '// swift-tools-version: 5.9\n'
+                'import PackageDescription\n'
+                'let package = Package(name: "libwebp", targets: [\n'
+                '    .binaryTarget(name: "WebP", url: "https://github.com/SPMForge/libwebp/releases/download/1.6.0-alpha.2/WebP-1.6.0-alpha.2.xcframework.zip", checksum: "2222222222222222222222222222222222222222222222222222222222222222")\n'
+                '])\n'
+            )
+
+            release_state = module.GitHubReleaseState(
+                release_exists=True,
+                release_is_prerelease=True,
+                release_is_latest=False,
+                release_asset_names=module.required_release_asset_names(PACKAGE_TAG),
+                release_id=101,
+            )
+
+            with (
+                mock.patch.object(module, "render_and_validate_package_manifest", return_value=rendered_manifest),
+                mock.patch.object(module, "read_optional_git_file", return_value=latest_manifest),
+                mock.patch.object(module, "repo_has_changes_since_tag", return_value=False),
+                mock.patch.object(module, "inspect_github_release_state", return_value=release_state),
+                mock.patch.object(module, "write_release_notes"),
+                mock.patch.object(module, "retag_release_archives"),
+            ):
+                result = module.prepare_release_publication(
+                    selection_mode="latest",
+                    release_channel="alpha",
+                    upstream_tag=UPSTREAM_TAG,
+                    upstream_commit="deadbeef",
+                    build_tag=PACKAGE_TAG,
+                    latest_package_tag=PACKAGE_TAG,
+                    next_package_tag="1.6.0-alpha.2",
+                    remote_tag_exists=True,
+                    remote_tag_commit="commit123",
+                    artifacts_dir=temp_path / "artifacts",
+                    metadata_dir=metadata_dir,
+                    validation_dir=temp_path / "validation",
+                    package_owner="SPMForge",
+                    package_repository="libwebp",
+                    github_repository="SPMForge/libwebp",
+                )
+                self.assertEqual(result.final_package_tag, "1.6.0-alpha.2")
+                self.assertEqual(result.mode, "fresh")
+
 
 class ReleaseCommandTests(unittest.TestCase):
     def test_command_prepare_release_publication_writes_github_outputs(self):
@@ -696,6 +756,55 @@ class ReleaseCommandTests(unittest.TestCase):
         self.assertIn("remote_tag_commit=abc123", github_output_body)
         self.assertIn("missing_assets=checksums.json", github_output_body)
         self.assertIn("metadata_needs_repair=true", github_output_body)
+
+    def test_command_inspect_release_writes_github_outputs(self):
+        module = load_spm_release_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            github_output_path = temp_path / "github-output.txt"
+
+            inspect_payload = {
+                "package_tag": PACKAGE_TAG,
+                "upstream_tag": UPSTREAM_TAG,
+                "release_channel": "alpha",
+                "tag_exists": True,
+                "release_exists": True,
+                "required_assets": ["WebP.xcframework.zip"],
+                "published_assets": ["WebP.xcframework.zip"],
+                "missing_assets": [],
+                "release_is_prerelease": True,
+                "release_is_latest": False,
+                "metadata_needs_repair": False,
+                "mode": "skip",
+            }
+
+            with mock.patch.object(module, "inspect_release", return_value=inspect_payload):
+                parser = module.build_parser()
+                args = parser.parse_args(
+                    [
+                        "inspect-release",
+                        "--github-repository",
+                        "SPMForge/libwebp",
+                        "--package-tag",
+                        PACKAGE_TAG,
+                        "--upstream-tag",
+                        UPSTREAM_TAG,
+                        "--release-channel",
+                        "alpha",
+                        "--tag-exists",
+                        "--github-output",
+                        str(github_output_path),
+                    ]
+                )
+                with mock.patch("sys.stdout", new=io.StringIO()):
+                    exit_code = args.func(args)
+                self.assertEqual(exit_code, 0)
+
+            outputs = github_output_path.read_text(encoding="utf-8")
+            self.assertIn("mode=skip", outputs)
+            self.assertIn("release_exists=true", outputs)
+            self.assertIn("metadata_needs_repair=false", outputs)
 
     def test_command_render_package_swift_rejects_non_object_checksum_json(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1611,7 +1720,7 @@ class WorkflowTopologyTests(unittest.TestCase):
         self.assertIn("resolve:", workflow_body)
         self.assertIn("build:", workflow_body)
         self.assertIn("publish:", workflow_body)
-        self.assertIn("needs: resolve", workflow_body)
+        self.assertIn("needs: [verify, resolve]", workflow_body)
         self.assertIn("needs: [resolve, build]", workflow_body)
         self.assertEqual(
             workflow_body.count("python3 scripts/spm_release.py fetch-upstream-tags --remote upstream"),

@@ -24,7 +24,24 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
+concurrency:
+  group: spm-package-publication-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
+  verify:
+    name: Verify packaging gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Verify SOP and packaging tests
+        run: |
+          python3 scripts/verify_sop_conformance.py
+          python3 -m unittest discover -s tests -p 'test_*.py'
+
   resolve:
     name: Resolve release target
     runs-on: macos-15
@@ -38,6 +55,7 @@ jobs:
       build_tag: ${{ steps.release_tag.outputs.build_tag }}
       remote_tag_exists: ${{ steps.release_tag.outputs.remote_tag_exists }}
       remote_tag_commit: ${{ steps.release_tag.outputs.remote_tag_commit }}
+      publication_mode: ${{ steps.release_status.outputs.mode }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -59,6 +77,11 @@ jobs:
         id: release_tag
         run: |
           set -euo pipefail
+
+          if [[ "${{ inputs.publish_to_main }}" == "true" && "${{ inputs.release_channel }}" != "stable" ]]; then
+            echo "publish_to_main is only supported for stable releases." >&2
+            exit 1
+          fi
 
           selection_mode="${{ inputs.selection_mode }}"
           requested_upstream_tag="${{ inputs.upstream_tag }}"
@@ -153,11 +176,44 @@ jobs:
           echo "remote_tag_exists=${remote_tag_exists}" >> "${GITHUB_OUTPUT}"
           echo "remote_tag_commit=${remote_tag_commit}" >> "${GITHUB_OUTPUT}"
 
+      - name: Capture immutable release inputs
+        run: |
+          python3 scripts/release_inputs.py capture --upstream-tag "${{ steps.release_tag.outputs.upstream_tag }}" --upstream-commit "${{ steps.release_tag.outputs.upstream_commit }}"
+
+      - name: Inspect existing release state
+        id: release_status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          inspect_args=(
+            inspect-release
+            --github-repository "${GITHUB_REPOSITORY}"
+            --package-tag "${{ steps.release_tag.outputs.build_tag }}"
+            --upstream-tag "${{ steps.release_tag.outputs.upstream_tag }}"
+            --release-channel "${{ steps.release_tag.outputs.release_channel }}"
+            --github-output "${GITHUB_OUTPUT}"
+          )
+
+          if [[ "${{ steps.release_tag.outputs.remote_tag_exists }}" == "true" ]]; then
+            inspect_args+=(--tag-exists)
+          fi
+
+          python3 scripts/spm_release.py "${inspect_args[@]}"
+
+          python3 scripts/release_inputs.py guard \
+            --tag "${{ steps.release_tag.outputs.build_tag }}" \
+            --release-channel "${{ steps.release_tag.outputs.release_channel }}" \
+            --github-output "$GITHUB_OUTPUT"
+
   build:
     name: Build release artifacts
-    needs: resolve
+    needs: [verify, resolve]
+    if: needs.resolve.outputs.publication_mode != 'skip' && needs.resolve.outputs.publication_mode != 'metadata'
     runs-on: macos-15
     env:
+      SPMFORGE_EXPECTED_UPSTREAM_COMMIT: ${{ needs.resolve.outputs.upstream_commit }}
       SPM_RELEASE_ENABLE_CCACHE: "1"
       CCACHE_KEY_SCHEMA: v3
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -315,6 +371,7 @@ jobs:
   publish:
     name: Publish package release
     needs: [resolve, build]
+    if: always() && needs.resolve.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped') && needs.resolve.outputs.publication_mode != 'skip' && needs.resolve.outputs.publication_mode != 'metadata'
     runs-on: macos-15
     env:
       REPOSITORY_OWNER: ${{ github.repository_owner }}
@@ -336,6 +393,10 @@ jobs:
         with:
           name: package-build-bundle-${{ github.run_id }}
           path: ${{ runner.temp }}/publication-inputs
+
+      - name: Restore immutable release inputs
+        run: |
+          python3 scripts/release_inputs.py capture --upstream-tag "${{ needs.resolve.outputs.upstream_tag }}" --upstream-commit "${{ needs.resolve.outputs.upstream_commit }}"
 
       - name: Prepare release publication
         id: publication
@@ -391,9 +452,9 @@ jobs:
           git switch --create "${release_branch}"
 
           cp "${metadata_dir}/Package.swift" Package.swift
-          git add Package.swift
+          git add Package.swift config/release-inputs.json
 
-          if git diff --cached --quiet -- Package.swift; then
+          if git diff --cached --quiet -- Package.swift config/release-inputs.json; then
             commit_sha="$(git rev-parse HEAD)"
           else
             git commit -m "Release ${{ steps.publication.outputs.package_tag }}"
@@ -441,11 +502,11 @@ jobs:
           metadata_dir="${RUNNER_TEMP}/publication-inputs/release-metadata"
 
           if [[ "${{ steps.publication.outputs.release_exists }}" == "true" ]]; then
-            gh release upload "${{ steps.publication.outputs.package_tag }}" \
-              "${artifacts_dir}"/*.zip \
-              "${metadata_dir}/checksums.json" \
+            python3 scripts/upload_release_assets.py \
+              --tag "${{ steps.publication.outputs.package_tag }}" \
               --repo "${GITHUB_REPOSITORY}" \
-              --clobber
+              "${artifacts_dir}"/*.zip \
+              "${metadata_dir}/checksums.json"
             gh release edit "${{ steps.publication.outputs.package_tag }}" \
               --repo "${GITHUB_REPOSITORY}" \
               --title "${{ steps.publication.outputs.package_tag }}" \
@@ -514,3 +575,52 @@ jobs:
           set -euo pipefail
 
           git push origin "${{ steps.release_commit.outputs.commit_sha }}:refs/heads/${DEFAULT_BRANCH}"
+
+  promote_existing_stable:
+    name: Promote existing stable metadata
+    needs: [verify, resolve]
+    if: needs.resolve.result == 'success' && needs.resolve.outputs.publication_mode == 'skip' && inputs.release_channel == 'stable' && inputs.publish_to_main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Fast-forward default branch to verified stable tag
+        env:
+          TARGET_VERSION: ${{ needs.resolve.outputs.build_tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" "refs/tags/${TARGET_VERSION}:refs/tags/${TARGET_VERSION}"
+          release_commit="$(git rev-parse "refs/tags/${TARGET_VERSION}^{commit}")"
+          git push origin "${release_commit}:refs/heads/${DEFAULT_BRANCH}"
+
+  repair_existing_metadata:
+    name: Repair complete release metadata without rebuilding
+    needs: [verify, resolve]
+    if: needs.resolve.result == 'success' && needs.resolve.outputs.publication_mode == 'metadata'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Normalize existing release metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_VERSION: ${{ needs.resolve.outputs.build_tag }}
+          RELEASE_CHANNEL: ${{ inputs.release_channel }}
+          PROMOTE_STABLE: ${{ inputs.publish_to_main }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        run: |
+          set -euo pipefail
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TARGET_VERSION}" --jq '.id')"
+          if [[ "$RELEASE_CHANNEL" == "stable" ]]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" -F draft=false -F prerelease=false >/dev/null
+          else
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${release_id}" -F draft=false -F prerelease=true -F make_latest=false >/dev/null
+          fi
+          if [[ "$RELEASE_CHANNEL" == "stable" && "$PROMOTE_STABLE" == "true" ]]; then
+            git fetch origin "refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}" "refs/tags/${TARGET_VERSION}:refs/tags/${TARGET_VERSION}"
+            release_commit="$(git rev-parse "refs/tags/${TARGET_VERSION}^{commit}")"
+            git push origin "${release_commit}:refs/heads/${DEFAULT_BRANCH}"
+          fi

@@ -149,7 +149,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          python3 -m unittest tests/test_spm_release.py
+          python3 -m unittest discover -s tests -p "test_*.py" -v
 
       - name: Verify SOP conformance
         run: |
