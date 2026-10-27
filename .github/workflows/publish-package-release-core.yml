@@ -140,6 +140,7 @@ jobs:
               python3 scripts/spm_release.py next-package-release-tag \
                 --upstream-tag "${upstream_tag}" < "${package_tags_file}"
             )"
+            next_package_tag="$(GH_TOKEN="${{ github.token }}" python3 scripts/release_inputs.py allocate-alpha --repository "$GITHUB_REPOSITORY" --tag "$next_package_tag" | python3 -c 'import json,sys; print(json.load(sys.stdin)["next_package_tag"])')"
             build_tag="${latest_package_tag:-${next_package_tag}}"
 
             if [[ -n "${latest_package_tag}" ]]; then
@@ -468,6 +469,9 @@ jobs:
             commit_sha="$(git rev-parse HEAD)"
           fi
 
+          if [[ "${{ inputs.release_channel }}" == "alpha" ]]; then
+            GH_TOKEN="${{ github.token }}" python3 scripts/release_inputs.py assert-alpha-available --repository "$GITHUB_REPOSITORY" --tag "${{ steps.publication.outputs.package_tag }}"
+          fi
           git tag "${{ steps.publication.outputs.package_tag }}" "${commit_sha}"
           git push origin "refs/tags/${{ steps.publication.outputs.package_tag }}"
 
